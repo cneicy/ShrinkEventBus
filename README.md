@@ -17,8 +17,12 @@
 
 ## 📦 依赖
 
-- Unity 2021.3+
+- Unity 2022.3+
 - [UniTask](https://github.com/Cysharp/UniTask) `2.x`
+
+## ⚙ 安装
+
+Git URL: `https://github.com/cneicy/ShrinkEventBus.git`
 
 ## 🚀 快速上手
 
@@ -95,6 +99,14 @@ EventBus.TriggerEvent(evt);
 // using 块结束时自动归还到池中
 ```
 
+## 追踪图形化
+
+菜单栏->Window(窗口)->Shrink EventBus->事件查看器
+
+![订阅者全览](img1.png)
+
+![实时触发日志](img2.png)
+
 ---
 
 ## 📖 核心概念
@@ -103,7 +115,7 @@ EventBus.TriggerEvent(evt);
 
 `EventPriority` 枚举定义了六个优先级档位，数值越小越先执行：
 
-```
+```plain
 HIGHEST(0) → HIGH(1) → NORMAL(2) → LOW(3) → LOWEST(4) → MONITOR(5)
 ```
 
@@ -133,7 +145,7 @@ EventBus.RegisterEvent<SomeEvent>(Handler, EventPriority.HIGH, receiveCanceled: 
 
 **推荐的优先级分工：**
 
-```
+```plain
 HIGHEST  — 权限校验、合法性检查
 HIGH     — 核心业务逻辑、数值计算
 NORMAL   — 默认行为、状态变更
@@ -295,7 +307,7 @@ evt.GetSubscribers() // 获取 handler 列表快照（调试用）
 
 ## 🏗️ 架构说明
 
-```
+```plain
 EventBus (静态门面)
 ├── EventCache<T>          泛型静态缓存，热路径绕过字典
 ├── ListenerList           线程安全的有序 handler 列表
@@ -309,7 +321,7 @@ EventBus (静态门面)
 
 **热路径（`TriggerEvent`）工作流：**
 
-```
+```plain
 TriggerEvent(evt)
   └─ 读取 EventCache<T>.List          // 静态字段，O(1)，无字典查找
        └─ GetHandlers()               // 返回内部数组引用，无拷贝
@@ -321,7 +333,7 @@ TriggerEvent(evt)
 
 **自动注册流程：**
 
-```
+```plain
 [RuntimeInitializeOnLoadMethod(BeforeSceneLoad)]
   └─ 扫描所有 Assembly，收集 [EventBusSubscriber] 类型
 
@@ -434,4 +446,4 @@ foreach (var h in evt.GetSubscribers())
 
 ## 📄 License
 
-MIT
+[MIT](LICENSE)
