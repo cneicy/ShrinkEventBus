@@ -1,6 +1,6 @@
 ﻿# ShrinkEventBus
 
-一个为 Unity C# 项目设计的高性能、类型安全事件总线系统。支持优先级调度、自动注册、同步/异步混合处理，以及完整的 MonoBehaviour 生命周期管理。
+一个为 Unity C# 项目设计的高性能、类型安全事件总线系统。支持优先级调度、编译期自动注册、同步/异步混合处理，以及完整的 MonoBehaviour 生命周期管理。
 
 ## ✨ 特性概览
 
@@ -8,21 +8,36 @@
 |------|------|
 | 🔒 **类型安全** | 基于泛型的强类型事件，编译期检查，无装箱开销 |
 | ⚡ **高性能热路径** | 泛型静态缓存 `EventCache<T>` 绕过字典查找，触发路径几乎零开销 |
-| 🤖 **自动注册** | 标记 `[EventBusSubscriber]` 即可，无需手动注册/注销，自动绑定 GameObject 生命周期 |
+| 🤖 **零侵入自动注册** | 标记 `[EventBusSubscriber]` 即可，ILPostProcessor 编译期自动织入注册逻辑，动态创建的对象也无需手写任何代码 |
 | 🎯 **双重优先级** | 支持枚举优先级与数字优先级组合，精确控制执行顺序 |
 | 🔄 **同步 & 异步** | 统一支持 `Action`、`UniTask`、`Task` 三种 handler 形式 |
 | 🧵 **线程安全** | 注册/注销操作全程加锁保护 |
 | 📦 **对象池** | 内置 `EventPool<T>`，高频事件零 GC |
-| 🔍 **调试友好** | Editor 事件追踪、调用栈溯源、订阅者信息查询 |
+| 🔍 **调试友好** | Editor 事件查看器实时追踪订阅者与触发日志 |
 
 ## 📦 依赖
 
 - Unity 2022.3+
 - [UniTask](https://github.com/Cysharp/UniTask) `2.x`
 
-## ⚙ 安装
+## ⚙️ 安装
 
-Git URL: `https://github.com/cneicy/ShrinkEventBus.git`
+在项目的 `Packages/manifest.json` 中添加：
+
+```json
+{
+  "dependencies": {
+    "com.cysharp.unitask": "https://github.com/Cysharp/UniTask.git?path=src/UniTask/Assets/Plugins/UniTask",
+    "com.cneicy.shrink-eventbus": "https://github.com/cneicy/ShrinkEventBus.git"
+  }
+}
+```
+
+或通过 Package Manager → `+` → `Add package from git URL` 输入：
+
+```
+https://github.com/cneicy/ShrinkEventBus.git
+```
 
 ## 🚀 快速上手
 
@@ -57,7 +72,9 @@ public class ItemPickupEvent : EventBase
 
 ### 第二步：订阅事件
 
-在 MonoBehaviour 上标记 `[EventBusSubscriber]`，用 `[EventSubscribe]` 标记处理方法，系统会在场景加载时自动完成注册，并在 GameObject 销毁时自动清理。
+在 MonoBehaviour 上标记 `[EventBusSubscriber]`，用 `[EventSubscribe]` 标记处理方法。
+
+**无论是场景初始时存在的对象，还是运行时动态 `Instantiate` 的对象，都会在进入场景时自动完成注册，销毁时自动清理，无需手写任何注册代码。**
 
 ```csharp
 [EventBusSubscriber]
@@ -99,9 +116,9 @@ EventBus.TriggerEvent(evt);
 // using 块结束时自动归还到池中
 ```
 
-## 🖼️追踪图形化
+## 🖼️ 追踪图形化
 
-菜单栏->Window(窗口)->Shrink EventBus->事件查看器
+菜单栏 → `Window（窗口）` → `Shrink EventBus` → `事件查看器`
 
 ![订阅者全览](img1.png)
 
@@ -111,11 +128,23 @@ EventBus.TriggerEvent(evt);
 
 ## 📖 核心概念
 
+### 自动注册机制
+
+ShrinkEventBus 通过 **ILPostProcessor** 在编译期自动处理注册逻辑。当 Unity 编译代码时，所有标记了 `[EventBusSubscriber]` 的 MonoBehaviour 子类会被自动识别，并在其 `Awake` 方法中织入 `EventBus.AutoRegister(this)`。
+
+这意味着：
+
+- 场景初始加载的对象 → `Awake` 执行时自动注册
+- 运行时 `Instantiate` 的对象 → `Awake` 执行时自动注册
+- GameObject 销毁时 → 自动反注册，无内存泄漏
+
+**整个过程对业务代码完全透明，类里不需要写任何注册相关的代码。**
+
 ### 优先级系统
 
 `EventPriority` 枚举定义了六个优先级档位，数值越小越先执行：
 
-```plain
+```
 HIGHEST(0) → HIGH(1) → NORMAL(2) → LOW(3) → LOWEST(4) → MONITOR(5)
 ```
 
@@ -145,7 +174,7 @@ EventBus.RegisterEvent<SomeEvent>(Handler, EventPriority.HIGH, receiveCanceled: 
 
 **推荐的优先级分工：**
 
-```plain
+```
 HIGHEST  — 权限校验、合法性检查
 HIGH     — 核心业务逻辑、数值计算
 NORMAL   — 默认行为、状态变更
@@ -202,9 +231,9 @@ bool success = pickupEvent.Result switch
 
 | 方式 | 适用场景 | 自动反注册 |
 |------|---------|-----------|
-| `[EventBusSubscriber]` + `[EventSubscribe]` | MonoBehaviour | ✅ 随 GameObject 销毁 |
+| `[EventBusSubscriber]` + `[EventSubscribe]` | MonoBehaviour（推荐） | ✅ 随 GameObject 销毁 |
 | `EventBus.RegisterEvent(...)` 手动注册 | 非 MonoBehaviour 类、Lambda | ❌ 需手动调用 `UnregisterEvent` |
-| `EventBus.AutoRegister(this)` | 运行时动态注册节点 | ✅ 需配合 `EventBusDestroyListener` |
+| `EventBus.AutoRegister(this)` | 特殊场景下手动触发 | ✅ 需配合 `EventBusDestroyListener` |
 
 **手动注册示例（非 MonoBehaviour）：**
 
@@ -307,21 +336,29 @@ evt.GetSubscribers() // 获取 handler 列表快照（调试用）
 
 ## 🏗️ 架构说明
 
-```plain
-EventBus (静态门面)
-├── EventCache<T>          泛型静态缓存，热路径绕过字典
-├── ListenerList           线程安全的有序 handler 列表
-├── EventHandlerInfo       单个 handler 的元信息（优先级、方法反射、调试信息）
-├── EventBase              所有事件的基类，携带生命周期状态
-├── EventPool<T>           对象池，高频事件减少 GC
-├── EventBusRegHelper      反射扫描 & handler 注册逻辑
-├── EventAutoRegHelper     运行时自动扫描场景内 MonoBehaviour
-└── EventBusDestroyListener  挂在 GameObject 上监听 OnDestroy 自动反注册
+```
+ShrinkEventBus
+├── Runtime/
+│   ├── EventBus                 静态门面，所有公开 API 的入口
+│   ├── EventCache<T>            泛型静态缓存，热路径绕过字典查找
+│   ├── ListenerList             线程安全的有序 handler 列表
+│   ├── EventHandlerInfo         单个 handler 的元信息（优先级、方法反射、调试信息）
+│   ├── EventBase                所有事件的基类，携带生命周期状态
+│   ├── EventPool<T>             对象池，高频事件减少 GC
+│   ├── EventBusRegHelper        反射扫描 & handler 注册逻辑
+│   ├── EventAutoRegHelper       场景加载时扫描并注册已存在的 MonoBehaviour
+│   └── EventBusDestroyListener  挂在 GameObject 上，OnDestroy 时自动反注册
+│
+├── Editor/
+│   └── EventBusViewerWindow     事件查看器，实时显示订阅者与触发日志
+│
+└── CodeGen/
+    └── EventBusILPostProcessor  编译期织入，自动向 [EventBusSubscriber] 类注入注册逻辑
 ```
 
 **热路径（`TriggerEvent`）工作流：**
 
-```plain
+```
 TriggerEvent(evt)
   └─ 读取 EventCache<T>.List          // 静态字段，O(1)，无字典查找
        └─ GetHandlers()               // 返回内部数组引用，无拷贝
@@ -331,18 +368,21 @@ TriggerEvent(evt)
                  └─ Func<T, UniTask> → .Forget()（同步路径）
 ```
 
-**自动注册流程：**
+**自动注册完整流程：**
 
-```plain
-[RuntimeInitializeOnLoadMethod(BeforeSceneLoad)]
-  └─ 扫描所有 Assembly，收集 [EventBusSubscriber] 类型
+```
+【编译期】ILPostProcessor 扫描所有程序集
+  └─ 找到标记了 [EventBusSubscriber] 的 MonoBehaviour 子类
+       └─ 在其 Awake 方法头部织入 EventBus.AutoRegister(this)
 
-[RuntimeInitializeOnLoadMethod(AfterSceneLoad)]
-  └─ FindObjectsByType 找到场景内已存在的 MonoBehaviour
-       └─ AutoRegister(mb)
-            ├─ 反射扫描 [EventSubscribe] 方法并注册
-            └─ 在 GameObject 上挂载 EventBusDestroyListener
-                 └─ OnDestroy → UnregisterInstance(target)
+【运行时 - 场景加载】RuntimeInitializeOnLoadMethod(AfterSceneLoad)
+  └─ FindObjectsByType 扫描场景内已存在的对象补充兜底注册
+
+【运行时 - 动态创建】Instantiate(prefab)
+  └─ Unity 调用新对象的 Awake（已含织入代码）→ 自动注册
+
+【运行时 - 销毁】GameObject.Destroy
+  └─ EventBusDestroyListener.OnDestroy → UnregisterInstance → 自动反注册
 ```
 
 ---
@@ -394,7 +434,7 @@ public void Dispose()
 
 **异步 handler 中谨慎触发新事件**
 
-在 `TriggerEventAsync` 的 handler 内部再次 `await TriggerEventAsync`，链条过深时会使调用栈难以追踪，建议把二次触发拆到外部或改用消息队列。
+在 `TriggerEventAsync` 的 handler 内部再次 `await TriggerEventAsync`，链条过深时调用栈难以追踪，建议把二次触发拆到外部或改用消息队列。
 
 ---
 
@@ -402,9 +442,10 @@ public void Dispose()
 
 - **`TriggerEvent` 不等待异步 handler**：同步路径中的 UniTask handler 以 `.Forget()` 触发，执行结果和异常不会传回调用方。需要等待时请使用 `TriggerEventAsync`。
 - **EventPool 归还后不要再使用**：`Release` 后对象会立即 `ResetInternal()`，继续访问属性将得到默认值。
-- **不要在 handler 内直接注册/注销 handler**：可能影响当前正在遍历的 handler 数组（虽然不会崩溃，但会产生语义上的不确定性）。
-- **静态 handler 永远不会自动注销**：静态方法注册后会持续存活直到显式调用 `UnregisterEvent`，不要在静态 handler 里持有场景对象引用。
+- **不要在 handler 内直接注册/注销 handler**：可能影响当前正在遍历的 handler 数组，会产生语义上的不确定性。
+- **静态 handler 永远不会自动注销**：静态方法注册后持续存活直到显式调用 `UnregisterEvent`，不要在静态 handler 里持有场景对象引用。
 - **`[EventBusSubscriber]` 仅对 MonoBehaviour 生效自动注册**：非 MonoBehaviour 类标记该 Attribute 无任何效果，请使用手动注册。
+- **ILPostProcessor 织入发生在编译期**：修改代码后需要重新编译才能使注入生效，热重载场景下请注意这一点。
 
 ---
 
@@ -413,9 +454,9 @@ public void Dispose()
 **事件没有被任何 handler 接收**
 
 1. 检查订阅类是否有 `[EventBusSubscriber]`
-2. 检查方法是否有 `[EventSubscribe]`，且方法签名为 `void/UniTask/Task Method(TEvent evt)`
-3. 检查 GameObject 是否在场景中且 `Active`（`FindObjectsByType` 包含 Inactive，但如果节点不在场景树则不会被扫描）
-4. 确认没有在 `Awake` 之前就触发事件（自动注册在 `AfterSceneLoad` 完成）
+2. 检查方法是否有 `[EventSubscribe]`，且签名为 `void/UniTask/Task Method(TEvent evt)`
+3. 确认代码在标记 `[EventBusSubscriber]` 后重新编译过（ILPostProcessor 需要编译期运行）
+4. 确认没有在 `Awake` 之前就触发事件（场景加载的兜底扫描在 `AfterSceneLoad` 完成）
 
 ```csharp
 // 调试：主动检查注册状态
@@ -434,11 +475,12 @@ foreach (var h in handlers)
 
 **Editor 下想追踪事件流**
 
-[🖼️追踪图形化](#️追踪图形化)
+打开事件查看器：菜单栏 → `Window` → `Shrink EventBus` → `事件查看器`
+
+也可以通过代码追踪：
 
 ```csharp
 EventBus.EnableDebugRecord = true;
-// 触发事件后检查
 EventBus.TriggerEvent(evt);
 foreach (var h in evt.GetSubscribers())
     Debug.Log($"[{h.Priority}] {h.DisplayDeclaringType.Name}.{h.DisplayMethodName}");
