@@ -1,0 +1,13 @@
+{
+    "name": "ShrinkEventBus.Editor",
+    "rootNamespace": "ShrinkEventBus.Editor",
+    "references": [
+        "ShrinkEventBus.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": ["Editor"],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "autoReferenced": false
+}
