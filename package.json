@@ -6,7 +6,7 @@
   "unity": "2022.3",
   "documentationUrl": "https://github.com/cneicy/ShrinkEventBus",
   "changelogUrl": "https://github.com/cneicy/ShrinkEventBus/blob/main/CHANGELOG.md",
-  "licensesUrl": "https://github.com/cneicy/ShrinkEventBus/blob/main/LICENSE.md",
+  "licensesUrl": "https://github.com/cneicy/ShrinkEventBus/blob/main/LICENSE",
   "dependencies": {
     "com.cysharp.unitask": "2.5.10"
   },
