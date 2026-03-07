@@ -99,7 +99,7 @@ EventBus.TriggerEvent(evt);
 // using 块结束时自动归还到池中
 ```
 
-## 追踪图形化
+## 🖼️追踪图形化
 
 菜单栏->Window(窗口)->Shrink EventBus->事件查看器
 
@@ -433,6 +433,8 @@ foreach (var h in handlers)
 ```
 
 **Editor 下想追踪事件流**
+
+[🖼️追踪图形化](#️追踪图形化)
 
 ```csharp
 EventBus.EnableDebugRecord = true;
