@@ -51,11 +51,27 @@ namespace ShrinkEventBus.CodeGen
             var awake = type.Methods.FirstOrDefault(m => m.Name == "Awake" && !m.IsStatic);
             if (awake == null)
             {
+                var baseAwake = FindVirtualMethodInBase(type, "Awake");
+                if (baseAwake != null)
+                {
+                    awake = new MethodDefinition("Awake",
+                        MethodAttributes.Family | MethodAttributes.HideBySig | MethodAttributes.Virtual,
+                        module.TypeSystem.Void);
+                    var il = awake.Body.GetILProcessor();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Call, module.ImportReference(baseAwake));
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Call, _autoRegisterMethodRef);
+                    il.Emit(OpCodes.Ret);
+                    type.Methods.Add(awake);
+                    return;
+                }
+
                 awake = new MethodDefinition("Awake",
                     MethodAttributes.Private | MethodAttributes.HideBySig,
                     module.TypeSystem.Void);
-                var il = awake.Body.GetILProcessor();
-                il.Emit(OpCodes.Ret);
+                var retIl = awake.Body.GetILProcessor();
+                retIl.Emit(OpCodes.Ret);
                 type.Methods.Add(awake);
             }
 
@@ -75,11 +91,27 @@ namespace ShrinkEventBus.CodeGen
             var onDestroy = type.Methods.FirstOrDefault(m => m.Name == "OnDestroy" && !m.IsStatic);
             if (onDestroy == null)
             {
+                var baseOnDestroy = FindVirtualMethodInBase(type, "OnDestroy");
+                if (baseOnDestroy != null)
+                {
+                    onDestroy = new MethodDefinition("OnDestroy",
+                        MethodAttributes.Family | MethodAttributes.HideBySig | MethodAttributes.Virtual,
+                        module.TypeSystem.Void);
+                    var il = onDestroy.Body.GetILProcessor();
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Call, _unregisterInstanceMethodRef);
+                    il.Emit(OpCodes.Ldarg_0);
+                    il.Emit(OpCodes.Call, module.ImportReference(baseOnDestroy));
+                    il.Emit(OpCodes.Ret);
+                    type.Methods.Add(onDestroy);
+                    return;
+                }
+
                 onDestroy = new MethodDefinition("OnDestroy",
                     MethodAttributes.Private | MethodAttributes.HideBySig,
                     module.TypeSystem.Void);
-                var il = onDestroy.Body.GetILProcessor();
-                il.Emit(OpCodes.Ret);
+                var retIl = onDestroy.Body.GetILProcessor();
+                retIl.Emit(OpCodes.Ret);
                 type.Methods.Add(onDestroy);
             }
 
@@ -92,6 +124,26 @@ namespace ShrinkEventBus.CodeGen
             };
             instructions.Reverse();
             instructions.ForEach(i => processor.Body.Instructions.Insert(0, i));
+        }
+
+        private static MethodDefinition FindVirtualMethodInBase(TypeDefinition type, string methodName)
+        {
+            try
+            {
+                var baseType = type.BaseType?.Resolve();
+                while (baseType != null)
+                {
+                    var method = baseType.Methods.FirstOrDefault(
+                        m => m.Name == methodName && !m.IsStatic && m.IsVirtual);
+                    if (method != null) return method;
+                    baseType = baseType.BaseType?.Resolve();
+                }
+            }
+            catch
+            {
+                // ignored
+            }
+            return null;
         }
 
         private void ImportReferences(ModuleDefinition module)
