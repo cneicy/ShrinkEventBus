@@ -8,27 +8,32 @@ namespace ShrinkEventBus
     public class ListenerList
     {
         private readonly object _lock = new();
-
         private readonly List<EventHandlerInfo> _list = new();
-
         private EventHandlerInfo[] _snapshot = Array.Empty<EventHandlerInfo>();
         private bool _dirty;
-
 
         public void Add(Delegate handler, EventPriority priority, int numericPriority,
             bool receiveCanceled, string debugInfo = "", MethodInfo? originalMethod = null)
         {
             var newInfo = new EventHandlerInfo(handler, priority, numericPriority,
                 receiveCanceled, debugInfo, originalMethod);
+            AddInfo(newInfo);
+        }
 
+        public void Add(EventHandlerInfo info)
+        {
+            AddInfo(info);
+        }
+
+        private void AddInfo(EventHandlerInfo info)
+        {
             lock (_lock)
             {
-                var index = BinarySearchInsertIndex(priority, numericPriority);
-                _list.Insert(index, newInfo);
+                var index = BinarySearchInsertIndex(info.Priority, info.NumericPriority);
+                _list.Insert(index, info);
                 _dirty = true;
             }
         }
-
 
         public bool Remove(Delegate handler)
         {
@@ -46,7 +51,6 @@ namespace ShrinkEventBus
                 return false;
             }
         }
-
 
         public void RemoveTarget(object target)
         {
@@ -105,7 +109,7 @@ namespace ShrinkEventBus
                 var cmp = existing.Priority.CompareTo(priority);
 
                 if (cmp == 0)
-                    cmp = numericPriority.CompareTo(existing.NumericPriority); // 降序
+                    cmp = numericPriority.CompareTo(existing.NumericPriority);
 
                 if (cmp < 0)
                     lo = mid + 1;

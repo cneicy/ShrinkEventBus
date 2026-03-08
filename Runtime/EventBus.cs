@@ -310,23 +310,9 @@ namespace ShrinkEventBus
             where TEvent : EventBase
         {
             if (!EnableDebugRecord) return;
+            var listenerList = eventArgs.GetListenerList();
             for (var i = 0; i < handlers.Length; i++)
-            {
-                var handler = handlers[i];
-                MethodInfo originalMethod = null;
-                var type = handler.GetType();
-                var prop = type.GetProperty("OriginalMethod");
-                if (prop != null) originalMethod = prop.GetValue(handler) as MethodInfo;
-                else
-                {
-                    var field = type.GetField("OriginalMethod");
-                    if (field != null) originalMethod = field.GetValue(handler) as MethodInfo;
-                }
-
-                eventArgs.GetListenerList().Add(handler.Handler, handler.Priority, handler.NumericPriority,
-                    handler.ReceiveCanceled, handler.DebugInfo, originalMethod);
-            }
-
+                listenerList.Add(handlers[i]);
             OnEventTriggeredForEditor?.Invoke(eventArgs, eventType.Name, GetSenderInfo());
         }
 
