@@ -11,18 +11,17 @@ namespace ShrinkEventBus.CodeGen
 {
     public class EventBusILPostProcessor : ILPostProcessor
     {
-        
         private readonly List<DiagnosticMessage> _diagnostics = new();
         private PostProcessorAssemblyResolver _assemblyResolver;
         private MethodReference _autoRegisterMethodRef;
+        private MethodReference _unregisterInstanceMethodRef;
 
         public override ILPostProcessor GetInstance() => this;
 
         public override bool WillProcess(ICompiledAssembly compiledAssembly)
         {
-            var result = compiledAssembly.References.Any(
+            return compiledAssembly.References.Any(
                 r => Path.GetFileNameWithoutExtension(r) == "ShrinkEventBus.Runtime");
-            return result;
         }
 
         public override ILPostProcessResult Process(ICompiledAssembly compiledAssembly)
@@ -41,6 +40,7 @@ namespace ShrinkEventBus.CodeGen
                 if (!InheritsFromMonoBehaviour(type)) continue;
 
                 InjectAutoRegister(type, mainModule);
+                InjectAutoUnregister(type, mainModule);
             }
 
             return GetResult(assemblyDefinition, _diagnostics);
@@ -60,14 +60,36 @@ namespace ShrinkEventBus.CodeGen
             }
 
             var processor = awake.Body.GetILProcessor();
-
             var instructions = new List<Instruction>
             {
                 processor.Create(OpCodes.Ldarg_0),
                 processor.Create(OpCodes.Call, _autoRegisterMethodRef),
                 processor.Create(OpCodes.Nop)
             };
+            instructions.Reverse();
+            instructions.ForEach(i => processor.Body.Instructions.Insert(0, i));
+        }
 
+        private void InjectAutoUnregister(TypeDefinition type, ModuleDefinition module)
+        {
+            var onDestroy = type.Methods.FirstOrDefault(m => m.Name == "OnDestroy" && !m.IsStatic);
+            if (onDestroy == null)
+            {
+                onDestroy = new MethodDefinition("OnDestroy",
+                    MethodAttributes.Private | MethodAttributes.HideBySig,
+                    module.TypeSystem.Void);
+                var il = onDestroy.Body.GetILProcessor();
+                il.Emit(OpCodes.Ret);
+                type.Methods.Add(onDestroy);
+            }
+
+            var processor = onDestroy.Body.GetILProcessor();
+            var instructions = new List<Instruction>
+            {
+                processor.Create(OpCodes.Ldarg_0),
+                processor.Create(OpCodes.Call, _unregisterInstanceMethodRef),
+                processor.Create(OpCodes.Nop)
+            };
             instructions.Reverse();
             instructions.ForEach(i => processor.Body.Instructions.Insert(0, i));
         }
@@ -75,12 +97,12 @@ namespace ShrinkEventBus.CodeGen
         private void ImportReferences(ModuleDefinition module)
         {
             var runtimeModule = FindRuntimeModule(module);
-            var eventBusType = runtimeModule.GetAllTypes()
-                .First(t => t.Name == "EventBus");
-            var autoRegisterMethod = eventBusType.Methods
-                .First(m => m.Name == "AutoRegister");
+            var eventBusType = runtimeModule.GetAllTypes().First(t => t.Name == "EventBus");
 
-            _autoRegisterMethodRef = module.ImportReference(autoRegisterMethod);
+            _autoRegisterMethodRef = module.ImportReference(
+                eventBusType.Methods.First(m => m.Name == "AutoRegister"));
+            _unregisterInstanceMethodRef = module.ImportReference(
+                eventBusType.Methods.First(m => m.Name == "UnregisterInstance"));
         }
 
         private ModuleDefinition FindRuntimeModule(ModuleDefinition module)

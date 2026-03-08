@@ -48,6 +48,7 @@ namespace ShrinkEventBus
                         return true;
                     }
                 }
+
                 return false;
             }
         }
@@ -65,6 +66,7 @@ namespace ShrinkEventBus
                         removed = true;
                     }
                 }
+
                 if (removed) _dirty = true;
             }
         }
@@ -78,13 +80,17 @@ namespace ShrinkEventBus
                     _snapshot = _list.ToArray();
                     _dirty = false;
                 }
+
                 return _snapshot;
             }
         }
 
         public int Count
         {
-            get { lock (_lock) return _list.Count; }
+            get
+            {
+                lock (_lock) return _list.Count;
+            }
         }
 
         public void Clear()

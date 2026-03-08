@@ -126,9 +126,7 @@ namespace ShrinkEventBus
             lock (EventHandlers)
             {
                 if (EventHandlers.Remove(eventType))
-                {
                     EventCache<TEvent>.List = null;
-                }
             }
         }
 
@@ -164,19 +162,6 @@ namespace ShrinkEventBus
             }
 
             UnregisterAllEventsForObject(targetObject);
-            if (targetObject is not MonoBehaviour mb || !mb) return;
-            try
-            {
-                if (!mb.gameObject ||
-                    !mb.gameObject.TryGetComponent<EventBusDestroyListener>(out var listener)) return;
-                if (listener)
-                {
-                    UnityEngine.Object.Destroy(listener);
-                }
-            }
-            catch (MissingReferenceException)
-            {
-            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -375,8 +360,8 @@ namespace ShrinkEventBus
             var eventType = typeof(TEvent);
             lock (EventHandlers)
             {
-                if (EventHandlers.TryGetValue(eventType, out var collection)) return collection;
-                return new ListenerList();
+                EventHandlers.TryGetValue(eventType, out var collection);
+                return collection;
             }
         }
 
@@ -384,7 +369,6 @@ namespace ShrinkEventBus
         public static void AutoRegister(object target)
         {
             if (target == null) return;
-
             if (IsInstanceRegistered(target)) return;
 
             EventBusRegHelper.RegisterEventHandlers(target);
@@ -392,16 +376,6 @@ namespace ShrinkEventBus
             lock (InstanceLock)
             {
                 if (!RegisteredInstances.Add(target)) return;
-            }
-
-            if (target is MonoBehaviour mb && mb && mb.gameObject)
-            {
-                if (!mb.gameObject.TryGetComponent<EventBusDestroyListener>(out _))
-                {
-                    var listener = mb.gameObject.AddComponent<EventBusDestroyListener>();
-                    listener.Target = target;
-                    listener.hideFlags = HideFlags.HideAndDontSave;
-                }
             }
         }
 
