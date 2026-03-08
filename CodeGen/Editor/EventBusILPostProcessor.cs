@@ -51,15 +51,15 @@ namespace ShrinkEventBus.CodeGen
             var awake = type.Methods.FirstOrDefault(m => m.Name == "Awake" && !m.IsStatic);
             if (awake == null)
             {
-                var baseAwake = FindVirtualMethodInBase(type, "Awake");
-                if (baseAwake != null)
+                var baseAwakeRef = FindBaseMethodReference(type, "Awake", module);
+                if (baseAwakeRef != null)
                 {
                     awake = new MethodDefinition("Awake",
                         MethodAttributes.Family | MethodAttributes.HideBySig | MethodAttributes.Virtual,
                         module.TypeSystem.Void);
                     var il = awake.Body.GetILProcessor();
                     il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Call, module.ImportReference(baseAwake));
+                    il.Emit(OpCodes.Call, baseAwakeRef);
                     il.Emit(OpCodes.Ldarg_0);
                     il.Emit(OpCodes.Call, _autoRegisterMethodRef);
                     il.Emit(OpCodes.Ret);
@@ -91,8 +91,8 @@ namespace ShrinkEventBus.CodeGen
             var onDestroy = type.Methods.FirstOrDefault(m => m.Name == "OnDestroy" && !m.IsStatic);
             if (onDestroy == null)
             {
-                var baseOnDestroy = FindVirtualMethodInBase(type, "OnDestroy");
-                if (baseOnDestroy != null)
+                var baseOnDestroyRef = FindBaseMethodReference(type, "OnDestroy", module);
+                if (baseOnDestroyRef != null)
                 {
                     onDestroy = new MethodDefinition("OnDestroy",
                         MethodAttributes.Family | MethodAttributes.HideBySig | MethodAttributes.Virtual,
@@ -101,7 +101,7 @@ namespace ShrinkEventBus.CodeGen
                     il.Emit(OpCodes.Ldarg_0);
                     il.Emit(OpCodes.Call, _unregisterInstanceMethodRef);
                     il.Emit(OpCodes.Ldarg_0);
-                    il.Emit(OpCodes.Call, module.ImportReference(baseOnDestroy));
+                    il.Emit(OpCodes.Call, baseOnDestroyRef);
                     il.Emit(OpCodes.Ret);
                     type.Methods.Add(onDestroy);
                     return;
@@ -126,23 +126,46 @@ namespace ShrinkEventBus.CodeGen
             instructions.ForEach(i => processor.Body.Instructions.Insert(0, i));
         }
 
-        private static MethodDefinition FindVirtualMethodInBase(TypeDefinition type, string methodName)
+        private static MethodReference FindBaseMethodReference(TypeDefinition type, string methodName, ModuleDefinition module)
         {
             try
             {
-                var baseType = type.BaseType?.Resolve();
-                while (baseType != null)
+                var baseTypeRef = type.BaseType;
+                while (baseTypeRef != null)
                 {
-                    var method = baseType.Methods.FirstOrDefault(
+                    var baseTypeDef = baseTypeRef.Resolve();
+                    if (baseTypeDef == null) break;
+
+                    var method = baseTypeDef.Methods.FirstOrDefault(
                         m => m.Name == methodName && !m.IsStatic && m.IsVirtual);
-                    if (method != null) return method;
-                    baseType = baseType.BaseType?.Resolve();
+
+                    if (method != null)
+                    {
+                        if (baseTypeRef is GenericInstanceType genericInstance)
+                        {
+                            var methodRef = new MethodReference(
+                                method.Name,
+                                module.ImportReference(method.ReturnType),
+                                module.ImportReference(genericInstance))
+                            {
+                                HasThis = method.HasThis,
+                                ExplicitThis = method.ExplicitThis,
+                                CallingConvention = method.CallingConvention
+                            };
+                            return methodRef;
+                        }
+
+                        return module.ImportReference(method);
+                    }
+
+                    baseTypeRef = baseTypeDef.BaseType;
                 }
             }
             catch
             {
                 // ignored
             }
+
             return null;
         }
 
@@ -161,9 +184,7 @@ namespace ShrinkEventBus.CodeGen
         {
             ModuleDefinition result = null;
             var visited = new HashSet<string>();
-            SearchRecursive(
-                _assemblyResolver.Resolve(module.Assembly.Name),
-                ref result, visited);
+            SearchRecursive(_assemblyResolver.Resolve(module.Assembly.Name), ref result, visited);
             return result;
         }
 
