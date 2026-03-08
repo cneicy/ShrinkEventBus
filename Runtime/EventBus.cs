@@ -10,7 +10,7 @@ namespace ShrinkEventBus
     public static class EventBus
     {
 #if UNITY_EDITOR
-        public static bool EnableDebugRecord { get; set; } = true;
+        public static bool EnableDebugRecord { get; set; }
         public static event Action<EventBase, string, string> OnEventTriggeredForEditor;
 #endif
 
