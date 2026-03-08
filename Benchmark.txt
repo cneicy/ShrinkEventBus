@@ -1,0 +1,68 @@
+[Benchmark] 开始：无订阅者触发
+[Benchmark] 完成：无订阅者触发
+[Benchmark] 开始：单订阅者同步触发
+[Benchmark] 完成：单订阅者同步触发
+[Benchmark] 开始：30 订阅者同步触发
+[Benchmark] 完成：30 订阅者同步触发
+[Benchmark] 开始：异步触发
+[Benchmark] 完成：异步触发
+[Benchmark] 开始：注册/注销
+[Benchmark] 完成：RegisterEvent
+[Benchmark] 完成：UnregisterEvent
+[Benchmark] 开始：EventPool vs new
+[Benchmark] 完成：new() 分配
+[Benchmark] 完成：Pool.Get()
+[Benchmark] 开始：已取消事件跳过
+[Benchmark] 完成：已取消事件跳过
+╔══════════════════════════════════════════════════╗
+║         ShrinkEventBus Benchmark Report          ║
+║  iter= 1000000 mass=10000 reg= 5000 cancel=100000  ║
+╚══════════════════════════════════════════════════╝
+
+  ▶ TriggerEvent × 无订阅者（基线）
+      总耗时 :     68.481 ms
+      单次   :     0.0685 μs/op
+      吞吐量 :   14602548 ops/s
+
+  ▶ TriggerEvent × 单订阅者同步
+      总耗时 :    115.262 ms
+      单次   :     0.1153 μs/op
+      吞吐量 :    8675871 ops/s
+
+  ▶ TriggerEvent × 30 订阅者同步
+      总耗时 :      7.376 ms
+      单次   :     0.7376 μs/op
+      吞吐量 :    1355712 ops/s
+
+  ▶ TriggerEventAsync × 单订阅者异步
+      总耗时 :      0.684 ms
+      单次   :     0.6840 μs/op
+      吞吐量 :    1461988 ops/s
+
+  ▶ RegisterEvent
+      总耗时 :     18.780 ms
+      单次   :     3.7561 μs/op
+      吞吐量 :     266236 ops/s
+
+  ▶ UnregisterEvent
+      总耗时 :    117.646 ms
+      单次   :    23.5292 μs/op
+      吞吐量 :      42500 ops/s
+
+  ▶ TriggerEvent × new()      [GC Gen0=6457]
+      总耗时 :   7684.313 ms
+      单次   :     7.6843 μs/op
+      吞吐量 :     130135 ops/s
+
+  ▶ TriggerEvent × Pool.Get() [GC Gen0= 91]
+      总耗时 :    348.948 ms
+      单次   :     0.3489 μs/op
+      吞吐量 :    2865761 ops/s
+
+  ▶ TriggerEvent × 已取消事件跳过（10 订阅者）
+      总耗时 :     25.282 ms
+      单次   :     0.2528 μs/op
+      吞吐量 :    3955352 ops/s
+
+══════════════════════════════════════════════════
+  全部测试完成

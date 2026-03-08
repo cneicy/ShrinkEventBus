@@ -15,6 +15,10 @@
 | 📦 **对象池** | 内置 `EventPool<T>`，高频事件零 GC |
 | 🔍 **调试友好** | Editor 事件查看器实时追踪订阅者与触发日志 |
 
+## 👓Benchmark
+
+[Benchmark结果](Benchmark.txt)
+
 ## 📦 依赖
 
 - Unity 2022.3+
