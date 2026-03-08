@@ -8,14 +8,14 @@
 |------|------|
 | 🔒 **类型安全** | 基于泛型的强类型事件，编译期检查，无装箱开销 |
 | ⚡ **高性能热路径** | 泛型静态缓存 `EventCache<T>` 绕过字典查找，触发路径几乎零开销 |
-| 🤖 **零侵入自动注册** | 标记 `[EventBusSubscriber]` 即可，ILPostProcessor 编译期自动织入注册逻辑，动态创建的对象也无需手写任何代码 |
+| 🤖 **零侵入自动注册** | 标记 `[EventBusSubscriber]` 即可，ILPostProcessor 编译期自动织入注册与反注册逻辑，动态创建的对象也无需手写任何代码 |
 | 🎯 **双重优先级** | 支持枚举优先级与数字优先级组合，精确控制执行顺序 |
 | 🔄 **同步 & 异步** | 统一支持 `Action`、`UniTask`、`Task` 三种 handler 形式 |
 | 🧵 **线程安全** | 注册/注销操作全程加锁保护 |
 | 📦 **对象池** | 内置 `EventPool<T>`，高频事件零 GC |
 | 🔍 **调试友好** | Editor 事件查看器实时追踪订阅者与触发日志 |
 
-## 👓Benchmark
+## 👓 Benchmark
 
 [Benchmark结果](Benchmark.txt)
 
@@ -78,7 +78,7 @@ public class ItemPickupEvent : EventBase
 
 在 MonoBehaviour 上标记 `[EventBusSubscriber]`，用 `[EventSubscribe]` 标记处理方法。
 
-**无论是场景初始时存在的对象，还是运行时动态 `Instantiate` 的对象，都会在进入场景时自动完成注册，销毁时自动清理，无需手写任何注册代码。**
+**无论是场景初始时存在的对象，还是运行时动态 `Instantiate` 的对象，都会在 `Awake` 时自动完成注册，销毁时自动清理，无需手写任何注册代码。**
 
 ```csharp
 [EventBusSubscriber]
@@ -134,13 +134,19 @@ EventBus.TriggerEvent(evt);
 
 ### 自动注册机制
 
-ShrinkEventBus 通过 **ILPostProcessor** 在编译期自动处理注册逻辑。当 Unity 编译代码时，所有标记了 `[EventBusSubscriber]` 的 MonoBehaviour 子类会被自动识别，并在其 `Awake` 方法中织入 `EventBus.AutoRegister(this)`。
+ShrinkEventBus 通过 **ILPostProcessor** 在编译期自动处理完整的生命周期管理。当 Unity 编译代码时，所有标记了 `[EventBusSubscriber]` 的 MonoBehaviour 子类会被自动识别，并在其 `Awake` 和 `OnDestroy` 方法中分别织入注册与反注册逻辑。
+
+织入规则如下：
+
+- 类**自身已有** `Awake`/`OnDestroy`：在方法头部插入，用户自己负责 `base` 调用
+- 类**没有**，但**基类有虚方法**：生成 `protected override` 并自动调用 `base` 方法，`Awake` 顺序为 `base.Awake() → AutoRegister`，`OnDestroy` 顺序为 `UnregisterInstance → base.OnDestroy()`
+- 类**没有**，基类**也没有**：生成私有方法并插入
 
 这意味着：
 
 - 场景初始加载的对象 → `Awake` 执行时自动注册
 - 运行时 `Instantiate` 的对象 → `Awake` 执行时自动注册
-- GameObject 销毁时 → 自动反注册，无内存泄漏
+- GameObject 销毁时 → `OnDestroy` 执行时自动反注册，无内存泄漏
 
 **整个过程对业务代码完全透明，类里不需要写任何注册相关的代码。**
 
@@ -235,9 +241,9 @@ bool success = pickupEvent.Result switch
 
 | 方式 | 适用场景 | 自动反注册 |
 |------|---------|-----------|
-| `[EventBusSubscriber]` + `[EventSubscribe]` | MonoBehaviour（推荐） | ✅ 随 GameObject 销毁 |
+| `[EventBusSubscriber]` + `[EventSubscribe]` | MonoBehaviour（推荐） | ✅ ILP 织入 OnDestroy，随 GameObject 销毁自动清理 |
 | `EventBus.RegisterEvent(...)` 手动注册 | 非 MonoBehaviour 类、Lambda | ❌ 需手动调用 `UnregisterEvent` |
-| `EventBus.AutoRegister(this)` | 特殊场景下手动触发 | ✅ 需配合 `EventBusDestroyListener` |
+| `EventBus.AutoRegister(this)` | 特殊场景下手动触发 | ❌ 需手动调用 `UnregisterInstance` |
 
 **手动注册示例（非 MonoBehaviour）：**
 
@@ -302,7 +308,7 @@ EventBus.IsInstanceRegistered(object target);
 EventBus.GetRegisteredInstanceCount();
 EventBus.GetRegisteredEventTypeCount();
 EventBus.GetEventSubscribers<TEvent>();   // 返回 EventHandlerInfo[]
-EventBus.GetListenerList<TEvent>();
+EventBus.GetListenerList<TEvent>();       // 无订阅者时返回 null
 ```
 
 ### EventPool\<T\>
@@ -350,14 +356,14 @@ ShrinkEventBus
 │   ├── EventBase                所有事件的基类，携带生命周期状态
 │   ├── EventPool<T>             对象池，高频事件减少 GC
 │   ├── EventBusRegHelper        反射扫描 & handler 注册逻辑
-│   ├── EventAutoRegHelper       场景加载时扫描并注册已存在的 MonoBehaviour
-│   └── EventBusDestroyListener  挂在 GameObject 上，OnDestroy 时自动反注册
+│   └── EventAutoRegHelper       运行时初始化，确保 IsInitialized 状态正确
 │
 ├── Editor/
 │   └── EventBusViewerWindow     事件查看器，实时显示订阅者与触发日志
 │
 └── CodeGen/
-    └── EventBusILPostProcessor  编译期织入，自动向 [EventBusSubscriber] 类注入注册逻辑
+    └── EventBusILPostProcessor  编译期织入，向 [EventBusSubscriber] 类注入
+                                 Awake（AutoRegister）与 OnDestroy（UnregisterInstance）
 ```
 
 **热路径（`TriggerEvent`）工作流：**
@@ -365,7 +371,7 @@ ShrinkEventBus
 ```
 TriggerEvent(evt)
   └─ 读取 EventCache<T>.List          // 静态字段，O(1)，无字典查找
-       └─ GetHandlers()               // 返回内部数组引用，无拷贝
+       └─ GetHandlers()               // 返回内部快照数组，无拷贝
             └─ 遍历 handlers[]
                  ├─ 跳过已取消 & 不接收取消的 handler
                  ├─ Action<T> → 直接调用
@@ -377,16 +383,18 @@ TriggerEvent(evt)
 ```
 【编译期】ILPostProcessor 扫描所有程序集
   └─ 找到标记了 [EventBusSubscriber] 的 MonoBehaviour 子类
-       └─ 在其 Awake 方法头部织入 EventBus.AutoRegister(this)
+       ├─ 在 Awake 头部织入 EventBus.AutoRegister(this)
+       └─ 在 OnDestroy 头部织入 EventBus.UnregisterInstance(this)
+            （类无对应方法时自动生成，有虚基类方法时自动调用 base）
 
 【运行时 - 场景加载】RuntimeInitializeOnLoadMethod(AfterSceneLoad)
-  └─ FindObjectsByType 扫描场景内已存在的对象补充兜底注册
+  └─ 扫描程序集中的 [EventBusSubscriber] 类型，标记 IsInitialized
 
 【运行时 - 动态创建】Instantiate(prefab)
   └─ Unity 调用新对象的 Awake（已含织入代码）→ 自动注册
 
 【运行时 - 销毁】GameObject.Destroy
-  └─ EventBusDestroyListener.OnDestroy → UnregisterInstance → 自动反注册
+  └─ OnDestroy（已含织入代码）→ UnregisterInstance → 自动反注册
 ```
 
 ---
@@ -446,10 +454,11 @@ public void Dispose()
 
 - **`TriggerEvent` 不等待异步 handler**：同步路径中的 UniTask handler 以 `.Forget()` 触发，执行结果和异常不会传回调用方。需要等待时请使用 `TriggerEventAsync`。
 - **EventPool 归还后不要再使用**：`Release` 后对象会立即 `ResetInternal()`，继续访问属性将得到默认值。
-- **不要在 handler 内直接注册/注销 handler**：可能影响当前正在遍历的 handler 数组，会产生语义上的不确定性。
+- **不要在 handler 内直接注册/注销 handler**：可能影响当前正在遍历的 handler 快照，会产生语义上的不确定性。
 - **静态 handler 永远不会自动注销**：静态方法注册后持续存活直到显式调用 `UnregisterEvent`，不要在静态 handler 里持有场景对象引用。
 - **`[EventBusSubscriber]` 仅对 MonoBehaviour 生效自动注册**：非 MonoBehaviour 类标记该 Attribute 无任何效果，请使用手动注册。
 - **ILPostProcessor 织入发生在编译期**：修改代码后需要重新编译才能使注入生效，热重载场景下请注意这一点。
+- **继承泛型基类（如 `Singleton<T>`）时无需额外处理**：ILP 会正确识别泛型基类中的虚方法并生成 `protected override`，自动调用 `base.Awake()` 和 `base.OnDestroy()`。
 
 ---
 
@@ -460,7 +469,7 @@ public void Dispose()
 1. 检查订阅类是否有 `[EventBusSubscriber]`
 2. 检查方法是否有 `[EventSubscribe]`，且签名为 `void/UniTask/Task Method(TEvent evt)`
 3. 确认代码在标记 `[EventBusSubscriber]` 后重新编译过（ILPostProcessor 需要编译期运行）
-4. 确认没有在 `Awake` 之前就触发事件（场景加载的兜底扫描在 `AfterSceneLoad` 完成）
+4. 确认没有在 `Awake` 之前就触发事件
 
 ```csharp
 // 调试：主动检查注册状态
