@@ -27,16 +27,6 @@ namespace ShrinkEventBus
         private static void EnsureAutoManagerInitialized() => EventAutoRegHelper.EnsureInitialized();
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static void RegisterEvent<TEvent>(Action<TEvent> handler, string methodName, Type declaringType,
-            EventPriority priority = EventPriority.NORMAL, bool receiveCanceled = false) where TEvent : EventBase
-        {
-            var methodInfo = declaringType.GetMethod(methodName,
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
-            RegisterEventInternal(typeof(TEvent), handler, priority, 0, receiveCanceled,
-                $"Manual Sync Handler (Priority: {priority})", methodInfo);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void RegisterEvent<TEvent>(Func<TEvent, UniTask> handler, int priority = 0)
             where TEvent : EventBase
         {
@@ -185,10 +175,20 @@ namespace ShrinkEventBus
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryPrepareHandler<TEvent>(TEvent eventArgs, EventHandlerInfo handlerInfo)
+            where TEvent : EventBase
+        {
+            eventArgs.CurrentHandler = handlerInfo;
+            eventArgs.SetPhase(handlerInfo.Priority);
+            if (eventArgs.IsCancelable && eventArgs.IsCanceled && !handlerInfo.ReceiveCanceled)
+                return false;
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static async UniTask<bool> TriggerEventAsync<TEvent>(TEvent eventArgs) where TEvent : EventBase
         {
             EnsureAutoManagerInitialized();
-
             var collection = EventCache<TEvent>.List;
             if (collection == null) return false;
 
@@ -202,10 +202,7 @@ namespace ShrinkEventBus
             for (var i = 0; i < handlers.Length; i++)
             {
                 var handlerInfo = handlers[i];
-                eventArgs.CurrentHandler = handlerInfo;
-                eventArgs.SetPhase(handlerInfo.Priority);
-
-                if (eventArgs is { IsCancelable: true, IsCanceled: true } && !handlerInfo.ReceiveCanceled) continue;
+                if (!TryPrepareHandler(eventArgs, handlerInfo)) continue;
 
                 try
                 {
@@ -223,8 +220,7 @@ namespace ShrinkEventBus
                 catch (Exception ex)
                 {
                     Debug.LogException(ex);
-                    Debug.LogError(
-                        $"[EventBus] {typeof(TEvent).Name} Async Handler {handlerInfo.DisplayDeclaringType.Name}.{handlerInfo.DisplayMethodName} Exception: {ex.Message}");
+                    Debug.LogError($"[EventBus] Async Handler Exception: {ex.Message}");
                 }
             }
 
@@ -236,7 +232,6 @@ namespace ShrinkEventBus
         public static bool TriggerEvent<TEvent>(TEvent eventArgs) where TEvent : EventBase
         {
             EnsureAutoManagerInitialized();
-
             var collection = EventCache<TEvent>.List;
             if (collection == null) return false;
 
@@ -250,10 +245,7 @@ namespace ShrinkEventBus
             for (var i = 0; i < handlers.Length; i++)
             {
                 var handlerInfo = handlers[i];
-                eventArgs.CurrentHandler = handlerInfo;
-                eventArgs.SetPhase(handlerInfo.Priority);
-
-                if (eventArgs is { IsCancelable: true, IsCanceled: true } && !handlerInfo.ReceiveCanceled) continue;
+                if (!TryPrepareHandler(eventArgs, handlerInfo)) continue;
 
                 try
                 {
@@ -272,8 +264,7 @@ namespace ShrinkEventBus
                 catch (Exception ex)
                 {
                     Debug.LogException(ex);
-                    Debug.LogError(
-                        $"[EventBus] {typeof(TEvent).Name} Sync Handler {handlerInfo.DisplayDeclaringType.Name}.{handlerInfo.DisplayMethodName} Exception: {ex.Message}");
+                    Debug.LogError($"[EventBus] Sync Handler Exception: {ex.Message}");
                 }
             }
 
@@ -311,19 +302,13 @@ namespace ShrinkEventBus
                 {
                     var method = trace.GetFrame(i)?.GetMethod();
                     var declaringType = method?.DeclaringType;
-
                     if (declaringType == null) continue;
-                    if (declaringType == typeof(EventBus) ||
-                        declaringType.DeclaringType == typeof(EventBus)) continue;
+                    if (declaringType == typeof(EventBus) || declaringType.DeclaringType == typeof(EventBus)) continue;
                     var ns = declaringType.Namespace ?? "";
-                    if (ns.StartsWith("System") || ns.StartsWith("Cysharp") || ns.StartsWith("UnityEngine"))
-                        continue;
-
+                    if (ns.StartsWith("System") || ns.StartsWith("Cysharp") || ns.StartsWith("UnityEngine")) continue;
                     var className = declaringType.Name;
                     var methodName = method.Name;
-
-                    if (declaringType.DeclaringType != null && className.StartsWith("<") &&
-                        className.Contains(">"))
+                    if (declaringType.DeclaringType != null && className.StartsWith("<") && className.Contains(">"))
                     {
                         className = declaringType.DeclaringType.Name;
                         var startIndex = declaringType.Name.IndexOf('<') + 1;
@@ -337,7 +322,6 @@ namespace ShrinkEventBus
             }
             catch
             {
-                // ignored
             }
 
             return senderInfo;
@@ -370,9 +354,7 @@ namespace ShrinkEventBus
         {
             if (target == null) return;
             if (IsInstanceRegistered(target)) return;
-
             EventBusRegHelper.RegisterEventHandlers(target);
-
             lock (InstanceLock)
             {
                 if (!RegisteredInstances.Add(target)) return;

@@ -1,10 +1,15 @@
 ﻿using System;
 using System.Reflection;
-
 #pragma warning disable CS8632 // 只能在 "#nullable" 注释上下文内的代码中使用可为 null 的引用类型的注释。
+
 
 namespace ShrinkEventBus
 {
+    public interface IMethodWrapper
+    {
+        MethodInfo OriginalMethod { get; }
+    }
+
     public class EventHandlerInfo
     {
         public Delegate Handler { get; }
@@ -49,24 +54,9 @@ namespace ShrinkEventBus
 
         private static MethodInfo? ExtractOriginalMethodFromWrapper(Delegate handler)
         {
-            if (handler.Target == null) return null;
-
-            var targetType = handler.Target.GetType();
-            if (!targetType.Name.Contains("MethodInfoPreserving")) return null;
-
-            try
+            if (handler.Target is IMethodWrapper wrapper)
             {
-                var field = targetType.GetField("OriginalMethod",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (field != null) return field.GetValue(handler.Target) as MethodInfo;
-
-                var prop = targetType.GetProperty("OriginalMethod",
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                if (prop != null) return prop.GetValue(handler.Target) as MethodInfo;
-            }
-            catch
-            {
-                // ignored
+                return wrapper.OriginalMethod;
             }
 
             return null;

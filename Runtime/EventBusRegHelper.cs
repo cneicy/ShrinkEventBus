@@ -1,7 +1,6 @@
 using System;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -54,17 +53,13 @@ namespace ShrinkEventBus
             foreach (var method in methods)
             {
                 if (target != null && method.IsStatic) continue;
-
                 var attributes = method.GetCustomAttributes(typeof(EventSubscribeAttribute), false);
                 if (attributes.Length == 0) continue;
-
                 var subscribeAttr = (EventSubscribeAttribute)attributes[0];
                 var parameters = method.GetParameters();
-
                 if (parameters.Length != 1) continue;
                 var parameterType = parameters[0].ParameterType;
                 if (!typeof(EventBase).IsAssignableFrom(parameterType)) continue;
-
                 ProcessMethodRegistration(target, method, subscribeAttr, parameterType);
             }
         }
@@ -87,17 +82,6 @@ namespace ShrinkEventBus
                         subscribeAttr.NumericPriority, subscribeAttr.ReceiveCanceled,
                         $"{scope} {typeName}.{method.Name} (UniTask)", method);
                 }
-                else if (method.ReturnType == typeof(Task))
-                {
-                    var funcType = typeof(Func<,>).MakeGenericType(parameterType, typeof(Task));
-                    var handlerDelegate = target == null
-                        ? Delegate.CreateDelegate(funcType, method)
-                        : Delegate.CreateDelegate(funcType, target, method);
-                    var wrappedHandler = WrapTaskHandlerWithMethodInfo(parameterType, handlerDelegate, method);
-                    EventBus.RegisterEventInternal(parameterType, wrappedHandler, subscribeAttr.Priority,
-                        subscribeAttr.NumericPriority, subscribeAttr.ReceiveCanceled,
-                        $"{scope} {typeName}.{method.Name} (Task->UniTask)", method);
-                }
                 else if (method.ReturnType == typeof(void))
                 {
                     var actionType = typeof(Action<>).MakeGenericType(parameterType);
@@ -108,54 +92,17 @@ namespace ShrinkEventBus
                         subscribeAttr.NumericPriority, subscribeAttr.ReceiveCanceled,
                         $"{scope} {typeName}.{method.Name} (Sync)", method);
                 }
+                else
+                {
+                    Debug.LogWarning(
+                        $"[EventBus] Registration failed: {typeName}.{method.Name} return type must be void or UniTask.");
+                }
             }
             catch (Exception ex)
             {
 #if UNITY_EDITOR
                 Debug.LogWarning($"[EventBus] Registration failed for {method.Name}: {ex.Message}");
 #endif
-            }
-        }
-
-        private static Delegate WrapTaskHandlerWithMethodInfo(Type eventType, Delegate taskHandler,
-            MethodInfo originalMethod)
-        {
-            var method = typeof(EventBusRegHelper)
-                .GetMethod(nameof(WrapTaskActionWithMethodInfo), BindingFlags.NonPublic | BindingFlags.Static)
-                ?.MakeGenericMethod(eventType);
-            return (Delegate)method.Invoke(null, new object[] { taskHandler, originalMethod })!;
-        }
-
-        private static Func<T, UniTask> WrapTaskActionWithMethodInfo<T>(Delegate actionDelegate,
-            MethodInfo originalMethod)
-        {
-            var typedAction = (Func<T, Task>)actionDelegate;
-            var wrapper = new MethodInfoPreservingTaskWrapper<T>(typedAction, originalMethod);
-            return wrapper.ExecuteAsync;
-        }
-
-        private class MethodInfoPreservingTaskWrapper<T>
-        {
-            private readonly Func<T, Task> _originalAction;
-            public readonly MethodInfo OriginalMethod;
-
-            public MethodInfoPreservingTaskWrapper(Func<T, Task> originalAction, MethodInfo originalMethod)
-            {
-                _originalAction = originalAction;
-                OriginalMethod = originalMethod;
-            }
-
-            public async UniTask ExecuteAsync(T arg)
-            {
-                try
-                {
-                    await _originalAction(arg);
-                }
-                catch (Exception ex)
-                {
-                    Debug.LogException(ex);
-                    Debug.LogError($"[EventBus] Task {OriginalMethod.Name}: {ex.Message}");
-                }
             }
         }
     }

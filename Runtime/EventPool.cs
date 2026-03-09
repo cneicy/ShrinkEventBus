@@ -7,6 +7,7 @@ namespace ShrinkEventBus
     {
         private static readonly Stack<T> Pool = new(32);
         private static readonly object Lock = new();
+        private static readonly Action<EventBase> CachedReleaseAction = e => Release((T)e);
 
         public static T Get()
         {
@@ -21,7 +22,7 @@ namespace ShrinkEventBus
             }
 
             var newEvt = new T();
-            newEvt.ReleaseAction = e => Release((T)e);
+            newEvt.ReleaseAction = CachedReleaseAction;
             return newEvt;
         }
 
