@@ -32,7 +32,31 @@ namespace ShrinkEventBus.CodeGen
             var assemblyDefinition = AssemblyDefinitionFor(compiledAssembly);
             var mainModule = assemblyDefinition.MainModule;
 
-            ImportReferences(mainModule);
+            bool needWeaving = false;
+            foreach (var type in mainModule.Types)
+            {
+                if (HasAttribute(type, "EventBusSubscriberAttribute") && InheritsFromMonoBehaviour(type))
+                {
+                    needWeaving = true;
+                    break;
+                }
+            }
+
+            if (!needWeaving) return null;
+
+            try
+            {
+                ImportReferences(mainModule);
+            }
+            catch (System.Exception ex)
+            {
+                _diagnostics.Add(new DiagnosticMessage
+                {
+                    DiagnosticType = DiagnosticType.Error,
+                    MessageData = $"[ShrinkEventBus] ILPostProcessor Error: {ex.Message}"
+                });
+                return GetResult(assemblyDefinition, _diagnostics);
+            }
 
             foreach (var type in mainModule.Types)
             {
@@ -172,7 +196,16 @@ namespace ShrinkEventBus.CodeGen
         private void ImportReferences(ModuleDefinition module)
         {
             var runtimeModule = FindRuntimeModule(module);
-            var eventBusType = runtimeModule.GetAllTypes().First(t => t.Name == "EventBus");
+            if (runtimeModule == null)
+            {
+                throw new System.Exception("Cannot find ShrinkEventBus.Runtime module in assembly references.");
+            }
+
+            var eventBusType = runtimeModule.GetAllTypes().FirstOrDefault(t => t.Name == "EventBus");
+            if (eventBusType == null)
+            {
+                throw new System.Exception("Cannot find EventBus class in ShrinkEventBus.Runtime.");
+            }
 
             _autoRegisterMethodRef = module.ImportReference(
                 eventBusType.Methods.First(m => m.Name == "AutoRegister"));
@@ -190,9 +223,11 @@ namespace ShrinkEventBus.CodeGen
 
         private void SearchRecursive(AssemblyDefinition asm, ref ModuleDefinition found, HashSet<string> visited)
         {
+            if (asm == null) return;
+
             foreach (var mod in asm.Modules)
             {
-                if (mod.Name == "ShrinkEventBus.Runtime.dll")
+                if (mod.Name == "ShrinkEventBus.Runtime.dll" || mod.Name == "ShrinkEventBus.Runtime")
                 {
                     found = mod;
                     return;
