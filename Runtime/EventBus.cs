@@ -9,6 +9,8 @@ namespace ShrinkEventBus
 {
     public static class EventBus
     {
+        public static event Action<EventBase, Type> OnEventTriggered;
+
 #if UNITY_EDITOR
         public static bool EnableDebugRecord { get; set; }
         public static event Action<EventBase, string, string> OnEventTriggeredForEditor;
@@ -189,15 +191,10 @@ namespace ShrinkEventBus
         public static async UniTask<bool> TriggerEventAsync<TEvent>(TEvent eventArgs) where TEvent : EventBase
         {
             EnsureAutoManagerInitialized();
+            eventArgs.PrepareForDispatch();
             var collection = EventCache<TEvent>.List;
-            if (collection == null) return false;
-
-            var handlers = collection.GetHandlers();
+            var handlers = collection?.GetHandlers() ?? Array.Empty<EventHandlerInfo>();
             var wasHandled = false;
-
-#if UNITY_EDITOR
-            RecordEditorTrace(handlers, eventArgs, typeof(TEvent));
-#endif
 
             for (var i = 0; i < handlers.Length; i++)
             {
@@ -225,6 +222,7 @@ namespace ShrinkEventBus
             }
 
             eventArgs.CurrentHandler = null;
+            CompleteEventDispatch(eventArgs, typeof(TEvent), handlers);
             return wasHandled;
         }
 
@@ -232,15 +230,10 @@ namespace ShrinkEventBus
         public static bool TriggerEvent<TEvent>(TEvent eventArgs) where TEvent : EventBase
         {
             EnsureAutoManagerInitialized();
+            eventArgs.PrepareForDispatch();
             var collection = EventCache<TEvent>.List;
-            if (collection == null) return false;
-
-            var handlers = collection.GetHandlers();
+            var handlers = collection?.GetHandlers() ?? Array.Empty<EventHandlerInfo>();
             var wasHandled = false;
-
-#if UNITY_EDITOR
-            RecordEditorTrace(handlers, eventArgs, typeof(TEvent));
-#endif
 
             for (var i = 0; i < handlers.Length; i++)
             {
@@ -256,7 +249,8 @@ namespace ShrinkEventBus
                     }
                     else if (handlerInfo.Handler is Func<TEvent, UniTask> asyncHandler)
                     {
-                        FireAndForgetSafe(() => asyncHandler(eventArgs),
+                        var detachedEvent = EventCloneUtility.CloneForDetachedDispatch(eventArgs);
+                        FireAndForgetSafe(() => asyncHandler(detachedEvent),
                             $"{handlerInfo.DisplayDeclaringType.Name}.{handlerInfo.DisplayMethodName}");
                         wasHandled = true;
                     }
@@ -269,6 +263,7 @@ namespace ShrinkEventBus
             }
 
             eventArgs.CurrentHandler = null;
+            CompleteEventDispatch(eventArgs, typeof(TEvent), handlers);
             return wasHandled;
         }
 
@@ -281,15 +276,26 @@ namespace ShrinkEventBus
             });
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void CompleteEventDispatch(EventBase eventArgs, Type eventType, EventHandlerInfo[] handlers)
+        {
+            OnEventTriggered?.Invoke(eventArgs, eventType);
+
 #if UNITY_EDITOR
-        private static void RecordEditorTrace<TEvent>(EventHandlerInfo[] handlers, TEvent eventArgs, Type eventType)
-            where TEvent : EventBase
+            if (!EnableDebugRecord) return;
+            PrepareEditorTrace(handlers, eventArgs);
+            OnEventTriggeredForEditor?.Invoke(eventArgs, eventType.Name, GetSenderInfo());
+#endif
+        }
+
+#if UNITY_EDITOR
+        private static void PrepareEditorTrace(EventHandlerInfo[] handlers, EventBase eventArgs)
         {
             if (!EnableDebugRecord) return;
             var listenerList = eventArgs.GetListenerList();
+            listenerList.Clear();
             for (var i = 0; i < handlers.Length; i++)
                 listenerList.Add(handlers[i]);
-            OnEventTriggeredForEditor?.Invoke(eventArgs, eventType.Name, GetSenderInfo());
         }
 
         private static string GetSenderInfo()

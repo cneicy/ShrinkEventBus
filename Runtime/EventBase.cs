@@ -1,6 +1,7 @@
 ﻿#nullable enable
 using System;
 using System.Reflection;
+using System.Runtime.Serialization;
 
 namespace ShrinkEventBus
 {
@@ -10,16 +11,26 @@ namespace ShrinkEventBus
         private bool _isCanceled;
         private EventResult _result = EventResult.DEFAULT;
 
+        [IgnoreDataMember]
         public EventHandlerInfo? CurrentHandler { get; internal set; }
+
+        [IgnoreDataMember]
         public DateTime EventTime { get; private set; } = DateTime.UtcNow;
+
+        [IgnoreDataMember]
         public Guid EventId { get; private set; } = Guid.NewGuid();
 
+        [IgnoreDataMember]
         public bool IsCancelable { get; }
+
+        [IgnoreDataMember]
         public bool HasResult { get; }
+
+        [IgnoreDataMember]
         public EventPriority? Phase { get; private set; }
 
         internal bool IsInPool { get; set; }
-        internal Action<EventBase> ReleaseAction { get; set; }
+        internal Action<EventBase>? ReleaseAction { get; set; }
 
         protected EventBase()
         {
@@ -44,6 +55,16 @@ namespace ShrinkEventBus
             OnReset();
         }
 
+        internal void PrepareForDispatch()
+        {
+            CurrentHandler = null;
+            Phase = null;
+            EventTime = DateTime.UtcNow;
+            EventId = Guid.NewGuid();
+            _listenerList.Clear();
+        }
+
+        [IgnoreDataMember]
         public bool IsCanceled
         {
             get => _isCanceled;
@@ -54,6 +75,7 @@ namespace ShrinkEventBus
             }
         }
 
+        [IgnoreDataMember]
         public EventResult Result
         {
             get => _result;

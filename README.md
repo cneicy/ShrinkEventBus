@@ -122,11 +122,13 @@ EventBus.TriggerEvent(evt);
 
 ## 🖼️ 追踪图形化
 
-菜单栏 → `Window（窗口）` → `Shrink EventBus` → `事件查看器`
+菜单栏 → `ShrinkSDK` → `事件总线` → `事件查看器`
 
 ![订阅者全览](img1.png)
 
 ![实时触发日志](img2.png)
+
+实时触发日志页现已支持关键词过滤、按“有监听者 / 无监听者”筛选，以及“折叠同类事件”聚合查看，适合排查高频事件刷屏场景。
 
 ---
 
@@ -292,14 +294,14 @@ EventBus.UnregisterAllEvents();                         // 全部清空（谨慎
 #### 触发
 
 ```csharp
-// 同步触发：async handler 会以 .Forget() 方式触发，不等待
+// 同步触发：只同步等待 sync handler；async handler 会基于事件快照 fire-and-forget
 bool handled = EventBus.TriggerEvent<TEvent>(TEvent eventArgs);
 
 // 异步触发：顺序 await 每个 handler
 bool handled = await EventBus.TriggerEventAsync<TEvent>(TEvent eventArgs);
 ```
 
-> ⚠️ `TriggerEvent` 中遇到 async handler 时会调用 `.Forget()`，不会等待其完成。如果需要顺序等待，请使用 `TriggerEventAsync`。
+> ⚠️ `TriggerEvent` 中遇到 async handler 时，不会等待其完成，而是对当前事件做一份快照后异步执行。如果你需要让 async handler 参与最终状态（如 `IsCanceled` / `Result` / 后续字段改写），请使用 `TriggerEventAsync`。
 
 #### 查询
 
@@ -375,7 +377,7 @@ TriggerEvent(evt)
             └─ 遍历 handlers[]
                  ├─ 跳过已取消 & 不接收取消的 handler
                  ├─ Action<T> → 直接调用
-                 └─ Func<T, UniTask> → .Forget()（同步路径）
+                 └─ Func<T, UniTask> → 基于事件快照 .Forget()（同步路径）
 ```
 
 **自动注册完整流程：**
@@ -452,7 +454,8 @@ public void Dispose()
 
 ## ⚠️ 注意事项
 
-- **`TriggerEvent` 不等待异步 handler**：同步路径中的 UniTask handler 以 `.Forget()` 触发，执行结果和异常不会传回调用方。需要等待时请使用 `TriggerEventAsync`。
+- **`TriggerEvent` 不等待异步 handler**：同步路径中的 UniTask handler 会基于事件快照异步执行，执行结果和异常不会传回调用方，对原事件对象的改动也不会回写。需要等待并拿到最终状态时请使用 `TriggerEventAsync`。
+- **同步路径中的 async 快照是浅拷贝**：事件对象本身会复制一份，但如果载荷里挂着可变引用类型（如 `List<>`、`Dictionary<>`、自定义引用对象），内部成员仍然是共享引用。高风险数据建议改成不可变载荷，或统一走 `TriggerEventAsync`。
 - **EventPool 归还后不要再使用**：`Release` 后对象会立即 `ResetInternal()`，继续访问属性将得到默认值。
 - **不要在 handler 内直接注册/注销 handler**：可能影响当前正在遍历的 handler 快照，会产生语义上的不确定性。
 - **静态 handler 永远不会自动注销**：静态方法注册后持续存活直到显式调用 `UnregisterEvent`，不要在静态 handler 里持有场景对象引用。
@@ -488,7 +491,7 @@ foreach (var h in handlers)
 
 **Editor 下想追踪事件流**
 
-打开事件查看器：菜单栏 → `Window` → `Shrink EventBus` → `事件查看器`
+打开事件查看器：菜单栏 → `ShrinkSDK` → `事件总线` → `事件查看器`
 
 也可以通过代码追踪：
 

@@ -12,16 +12,61 @@ namespace ShrinkEventBus.Editor
 {
     public class EventBusViewerWindow : EditorWindow
     {
+        private enum LiveLogFilterMode
+        {
+            All,
+            HasListeners,
+            NoListeners
+        }
+
+        private sealed class HandlerDisplayData
+        {
+            public object TargetInstance { get; set; }
+            public MonoBehaviour PingTarget { get; set; }
+            public string TargetName { get; set; }
+            public string MethodName { get; set; }
+            public object Priority { get; set; }
+            public string ExecType { get; set; }
+            public bool IsStaticHandler { get; set; }
+        }
+
+        private sealed class EventLogRecord
+        {
+            public DateTime Timestamp { get; set; }
+            public string TimestampText { get; set; }
+            public string EventName { get; set; }
+            public string SenderInfo { get; set; }
+            public bool HasListeners { get; set; }
+            public bool IsCancelable { get; set; }
+            public bool IsCanceled { get; set; }
+            public string Result { get; set; }
+            public string Phase { get; set; }
+            public List<string> Parameters { get; set; }
+            public List<HandlerDisplayData> Handlers { get; set; }
+            public string MatchText { get; set; }
+        }
+
+        private sealed class EventLogGroup
+        {
+            public string EventName { get; set; }
+            public List<EventLogRecord> Records { get; } = new();
+            public EventLogRecord LatestRecord => Records[0];
+        }
+
         private ScrollView _subscribersScrollView;
         private ScrollView _liveTrackerScrollView;
         private VisualElement _subscribersTab;
         private VisualElement _liveTrackerTab;
         private Label _instanceCountLabel;
+        private Label _liveLogStatsLabel;
         private string _searchString = "";
+        private string _liveLogSearchString = "";
+        private LiveLogFilterMode _liveLogFilterMode = LiveLogFilterMode.All;
+        private bool _collapseSameEventType = true;
         private const int MaxLogCount = 100;
-        private readonly List<VisualElement> _logElements = new();
+        private readonly List<EventLogRecord> _logRecords = new();
 
-        [MenuItem("Window/Shrink EventBus/事件查看器")]
+        [MenuItem("ShrinkSDK/事件总线/事件查看器")]
         public static void ShowWindow()
         {
             var window = GetWindow<EventBusViewerWindow>("EventBus 控制台");
@@ -117,10 +162,65 @@ namespace ShrinkEventBus.Editor
         {
             var container = new VisualElement { style = { flexGrow = 1 } };
             var toolbar = new Toolbar();
+            var searchField = new ToolbarSearchField { style = { flexGrow = 1 } };
+            searchField.RegisterValueChangedCallback(evt =>
+            {
+                _liveLogSearchString = evt.newValue ?? string.Empty;
+                RefreshLiveTrackerView();
+            });
+            toolbar.Add(searchField);
+
+            var filterMenu = new ToolbarMenu { text = "全部事件" };
+            filterMenu.menu.AppendAction("全部事件", _ =>
+            {
+                _liveLogFilterMode = LiveLogFilterMode.All;
+                filterMenu.text = "全部事件";
+                RefreshLiveTrackerView();
+            });
+            filterMenu.menu.AppendAction("仅有监听者", _ =>
+            {
+                _liveLogFilterMode = LiveLogFilterMode.HasListeners;
+                filterMenu.text = "仅有监听者";
+                RefreshLiveTrackerView();
+            });
+            filterMenu.menu.AppendAction("仅无监听者", _ =>
+            {
+                _liveLogFilterMode = LiveLogFilterMode.NoListeners;
+                filterMenu.text = "仅无监听者";
+                RefreshLiveTrackerView();
+            });
+            toolbar.Add(filterMenu);
+
+            var collapseToggle = new ToolbarToggle
+            {
+                text = "折叠同类事件",
+                value = _collapseSameEventType
+            };
+            collapseToggle.RegisterValueChangedCallback(evt =>
+            {
+                _collapseSameEventType = evt.newValue;
+                RefreshLiveTrackerView();
+            });
+            toolbar.Add(collapseToggle);
             toolbar.Add(new ToolbarButton(ClearLogs) { text = "清空日志" });
             container.Add(toolbar);
+
+            _liveLogStatsLabel = new Label
+            {
+                style =
+                {
+                    marginLeft = 8,
+                    marginRight = 8,
+                    marginTop = 4,
+                    marginBottom = 4,
+                    color = new StyleColor(Color.gray)
+                }
+            };
+            container.Add(_liveLogStatsLabel);
+
             _liveTrackerScrollView = new ScrollView { style = { flexGrow = 1, paddingLeft = 5, paddingRight = 5 } };
             container.Add(_liveTrackerScrollView);
+            RefreshLiveTrackerView();
             return container;
         }
 
@@ -176,76 +276,232 @@ namespace ShrinkEventBus.Editor
         private void RecordEventLog(EventBase evt, string eventName, string senderInfo)
         {
             if (!EventBus.EnableDebugRecord) return;
+            _logRecords.Insert(0, CreateEventLogRecord(evt, eventName, senderInfo));
+            if (_logRecords.Count > MaxLogCount)
+                _logRecords.RemoveAt(_logRecords.Count - 1);
+            RefreshLiveTrackerView();
+        }
 
+        private EventLogRecord CreateEventLogRecord(EventBase evt, string eventName, string senderInfo)
+        {
+            var timestamp = DateTime.Now;
             var list = evt.GetListenerList();
-            var hasListeners = list != null && list.Count > 0;
-
-            var logEntry = new VisualElement
-            {
-                style =
-                {
-                    flexDirection = FlexDirection.Column, paddingBottom = 4, paddingTop = 4, borderBottomWidth = 1,
-                    borderBottomColor = new StyleColor(new Color(0.15f, 0.15f, 0.15f))
-                }
-            };
-
-            var headerRow = new VisualElement
-                { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
-            headerRow.Add(new Label(DateTime.Now.ToString("HH:mm:ss.fff"))
-                { style = { width = 80, color = new StyleColor(Color.gray) } });
-            headerRow.Add(new Label(eventName)
-            {
-                style = { color = new StyleColor(new Color(1f, 0.84f, 0f)), unityFontStyleAndWeight = FontStyle.Bold }
-            });
-
-            var senderClassName = senderInfo.Contains(".") ? senderInfo.Split('.')[0] : senderInfo;
-            var senderLabel = new Label($" [由 {senderInfo} 触发]")
-            {
-                style =
-                {
-                    color = new StyleColor(new Color(0.5f, 0.8f, 1f)), marginLeft = 5,
-                    unityFontStyleAndWeight = FontStyle.Italic
-                }
-            };
-
-            if (senderClassName != "未知来源" && senderClassName != "EventBus")
-            {
-                senderLabel.RegisterCallback<MouseEnterEvent>(e =>
-                    senderLabel.style.color = new StyleColor(Color.cyan));
-                senderLabel.RegisterCallback<MouseLeaveEvent>(e =>
-                    senderLabel.style.color = new StyleColor(new Color(0.5f, 0.8f, 1f)));
-                senderLabel.RegisterCallback<ClickEvent>(e => OpenScriptByClassName(senderClassName));
-            }
-
-            headerRow.Add(senderLabel);
-            logEntry.Add(headerRow);
+            var handlers = list?.GetHandlers() ?? Array.Empty<EventHandlerInfo>();
+            var hasListeners = handlers.Length > 0;
+            var paramsList = DumpEventParams(evt);
+            var handlerRows = new List<HandlerDisplayData>(handlers.Length);
+            foreach (var handler in handlers)
+                handlerRows.Add(ExtractHandlerDisplayData(handler));
 
             var isCancelable = (GetMemberValue(evt, "IsCancelable") as bool?) ?? false;
             var isCanceled = (GetMemberValue(evt, "IsCanceled") as bool?) ?? false;
             var resultStr = GetMemberValue(evt, "Result")?.ToString() ?? "DEFAULT";
             var phaseStr = GetMemberValue(evt, "Phase")?.ToString() ?? "NORMAL";
 
+            return new EventLogRecord
+            {
+                Timestamp = timestamp,
+                TimestampText = timestamp.ToString("HH:mm:ss.fff"),
+                EventName = eventName,
+                SenderInfo = senderInfo,
+                HasListeners = hasListeners,
+                IsCancelable = isCancelable,
+                IsCanceled = isCanceled,
+                Result = resultStr,
+                Phase = phaseStr,
+                Parameters = paramsList,
+                Handlers = handlerRows,
+                MatchText = BuildLogMatchText(eventName, senderInfo, paramsList)
+            };
+        }
+
+        private string BuildLogMatchText(string eventName, string senderInfo, List<string> paramsList)
+        {
+            if (paramsList.Count == 0)
+                return $"{eventName}\n{senderInfo}";
+            return $"{eventName}\n{senderInfo}\n{string.Join("\n", paramsList)}";
+        }
+
+        private void RefreshLiveTrackerView()
+        {
+            if (_liveTrackerScrollView == null) return;
+
+            _liveTrackerScrollView.Clear();
+
+            var filteredRecords = new List<EventLogRecord>();
+            foreach (var record in _logRecords)
+            {
+                if (MatchesLiveLogFilter(record))
+                    filteredRecords.Add(record);
+            }
+
+            if (_liveLogStatsLabel != null)
+            {
+                _liveLogStatsLabel.text = _collapseSameEventType
+                    ? $"显示 {filteredRecords.Count} / {_logRecords.Count} 条，按事件类型折叠"
+                    : $"显示 {filteredRecords.Count} / {_logRecords.Count} 条";
+            }
+
+            if (filteredRecords.Count == 0)
+            {
+                _liveTrackerScrollView.Add(new HelpBox("当前没有符合条件的实时事件日志。", HelpBoxMessageType.Info));
+                return;
+            }
+
+            if (_collapseSameEventType)
+            {
+                foreach (var group in BuildCollapsedGroups(filteredRecords))
+                    _liveTrackerScrollView.Add(CreateCollapsedGroupElement(group));
+                return;
+            }
+
+            foreach (var record in filteredRecords)
+                _liveTrackerScrollView.Add(CreateLogEntryElement(record));
+        }
+
+        private bool MatchesLiveLogFilter(EventLogRecord record)
+        {
+            switch (_liveLogFilterMode)
+            {
+                case LiveLogFilterMode.HasListeners:
+                    if (!record.HasListeners) return false;
+                    break;
+                case LiveLogFilterMode.NoListeners:
+                    if (record.HasListeners) return false;
+                    break;
+            }
+
+            if (string.IsNullOrWhiteSpace(_liveLogSearchString))
+                return true;
+
+            return record.MatchText.IndexOf(_liveLogSearchString.Trim(), StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private List<EventLogGroup> BuildCollapsedGroups(List<EventLogRecord> records)
+        {
+            var groups = new List<EventLogGroup>();
+            var groupMap = new Dictionary<string, EventLogGroup>(StringComparer.Ordinal);
+
+            foreach (var record in records)
+            {
+                if (!groupMap.TryGetValue(record.EventName, out var group))
+                {
+                    group = new EventLogGroup { EventName = record.EventName };
+                    groupMap[record.EventName] = group;
+                    groups.Add(group);
+                }
+
+                group.Records.Add(record);
+            }
+
+            return groups;
+        }
+
+        private VisualElement CreateCollapsedGroupElement(EventLogGroup group)
+        {
+            var latest = group.LatestRecord;
+            var foldout = new Foldout
+            {
+                text = $"{group.EventName} × {group.Records.Count}  最近: {latest.TimestampText}",
+                value = group.Records.Count == 1,
+                style =
+                {
+                    backgroundColor = new StyleColor(new Color(0.2f, 0.2f, 0.2f, 0.4f)),
+                    marginTop = 2,
+                    paddingBottom = 2,
+                    borderBottomWidth = 1,
+                    borderBottomColor = new StyleColor(new Color(0.1f, 0.1f, 0.1f))
+                }
+            };
+
+            var summary = new Label(
+                $"最近来源: {latest.SenderInfo} | 监听者: {(latest.HasListeners ? latest.Handlers.Count : 0)} | 已取消: {(latest.IsCanceled ? "是" : "否")}")
+            {
+                style =
+                {
+                    marginLeft = 18,
+                    marginBottom = 4,
+                    color = new StyleColor(Color.gray)
+                }
+            };
+            foldout.Add(summary);
+
+            foreach (var record in group.Records)
+            {
+                var row = CreateLogEntryElement(record);
+                row.style.marginLeft = 12;
+                foldout.Add(row);
+            }
+
+            return foldout;
+        }
+
+        private VisualElement CreateLogEntryElement(EventLogRecord record)
+        {
+            var logEntry = new VisualElement
+            {
+                style =
+                {
+                    flexDirection = FlexDirection.Column,
+                    paddingBottom = 4,
+                    paddingTop = 4,
+                    borderBottomWidth = 1,
+                    borderBottomColor = new StyleColor(new Color(0.15f, 0.15f, 0.15f))
+                }
+            };
+
+            var headerRow = new VisualElement
+                { style = { flexDirection = FlexDirection.Row, alignItems = Align.Center } };
+            headerRow.Add(new Label(record.TimestampText)
+                { style = { width = 80, color = new StyleColor(Color.gray) } });
+            headerRow.Add(new Label(record.EventName)
+            {
+                style = { color = new StyleColor(new Color(1f, 0.84f, 0f)), unityFontStyleAndWeight = FontStyle.Bold }
+            });
+
+            var senderClassName = GetSenderClassName(record.SenderInfo);
+            var senderLabel = new Label($" [由 {record.SenderInfo} 触发]")
+            {
+                style =
+                {
+                    color = new StyleColor(new Color(0.5f, 0.8f, 1f)),
+                    marginLeft = 5,
+                    unityFontStyleAndWeight = FontStyle.Italic
+                }
+            };
+
+            if (senderClassName != "未知来源" && senderClassName != "EventBus" && senderClassName != "Unknown")
+            {
+                senderLabel.RegisterCallback<MouseEnterEvent>(_ =>
+                    senderLabel.style.color = new StyleColor(Color.cyan));
+                senderLabel.RegisterCallback<MouseLeaveEvent>(_ =>
+                    senderLabel.style.color = new StyleColor(new Color(0.5f, 0.8f, 1f)));
+                senderLabel.RegisterCallback<ClickEvent>(_ => OpenScriptByClassName(senderClassName));
+            }
+
+            headerRow.Add(senderLabel);
+            logEntry.Add(headerRow);
+
             var statusRow = new VisualElement
                 { style = { flexDirection = FlexDirection.Row, marginLeft = 80, marginTop = 2 } };
-            statusRow.Add(new Label($"可取消: {(isCancelable ? "是" : "否")}")
+            statusRow.Add(new Label($"可取消: {(record.IsCancelable ? "是" : "否")}")
                 { style = { color = new StyleColor(Color.gray), marginRight = 15 } });
 
-            var canceledLabel = new Label($"已取消: {(isCanceled ? "是" : "否")}") { style = { marginRight = 15 } };
+            var canceledLabel = new Label($"已取消: {(record.IsCanceled ? "是" : "否")}")
+                { style = { marginRight = 15 } };
             canceledLabel.style.color =
-                isCanceled ? new StyleColor(new Color(1f, 0.3f, 0.3f)) : new StyleColor(Color.gray);
+                record.IsCanceled ? new StyleColor(new Color(1f, 0.3f, 0.3f)) : new StyleColor(Color.gray);
             statusRow.Add(canceledLabel);
 
-            statusRow.Add(new Label($"Result: {resultStr}")
+            statusRow.Add(new Label($"Result: {record.Result}")
                 { style = { color = new StyleColor(new Color(0.8f, 0.6f, 0.8f)), marginRight = 15 } });
-            statusRow.Add(new Label($"最后阶段: {phaseStr}")
+            statusRow.Add(new Label($"最后阶段: {record.Phase}")
                 { style = { color = new StyleColor(new Color(0.6f, 0.8f, 1f)) } });
             logEntry.Add(statusRow);
 
             var paramsContainer = new VisualElement
                 { style = { flexDirection = FlexDirection.Column, marginLeft = 80, marginTop = 2, marginBottom = 2 } };
-            var paramsList = DumpEventParams(evt);
-
-            if (paramsList.Count == 0)
+            if (record.Parameters.Count == 0)
             {
                 paramsContainer.Add(new Label("参数: { 无 }")
                     { style = { color = new StyleColor(new Color(0.5f, 0.5f, 0.5f)) } });
@@ -254,24 +510,17 @@ namespace ShrinkEventBus.Editor
             {
                 paramsContainer.Add(
                     new Label("携带参数:") { style = { color = new StyleColor(new Color(0.6f, 0.8f, 1f)) } });
-                foreach (var pStr in paramsList)
+                foreach (var pStr in record.Parameters)
                     paramsContainer.Add(new Label($"  • {pStr}")
                         { style = { color = new StyleColor(new Color(0.6f, 0.9f, 0.6f)), marginLeft = 10 } });
             }
 
             logEntry.Add(paramsContainer);
 
-            if (hasListeners)
+            if (record.HasListeners)
             {
-                if (list.GetType().GetMethod("GetHandlers")?.Invoke(list, null) is Array handlers)
-                {
-                    foreach (var h in handlers)
-                    {
-                        var row = CreateHandlerRow(h);
-                        row.style.marginLeft = 80;
-                        logEntry.Add(row);
-                    }
-                }
+                foreach (var handler in record.Handlers)
+                    logEntry.Add(CreateHandlerRow(handler, 80));
             }
             else
             {
@@ -281,26 +530,34 @@ namespace ShrinkEventBus.Editor
                 logEntry.Add(noHandlerRow);
             }
 
-            _liveTrackerScrollView.Insert(0, logEntry);
-            _logElements.Insert(0, logEntry);
+            return logEntry;
+        }
 
-            if (_logElements.Count > MaxLogCount)
-            {
-                _liveTrackerScrollView.Remove(_logElements[^1]);
-                _logElements.RemoveAt(_logElements.Count - 1);
-            }
+        private string GetSenderClassName(string senderInfo)
+        {
+            if (string.IsNullOrWhiteSpace(senderInfo))
+                return "未知来源";
+            return senderInfo.Contains(".") ? senderInfo.Split('.')[0] : senderInfo;
         }
 
         private VisualElement CreateHandlerRow(object h)
         {
-            ParseHandlerData(h, out var targetInstance, out var targetName, out var methodName, out var priority,
-                out var execType);
+            return CreateHandlerRow(ExtractHandlerDisplayData(h), 40);
+        }
+
+        private VisualElement CreateHandlerRow(HandlerDisplayData handlerData, float marginLeft)
+        {
+            var targetInstance = handlerData.TargetInstance;
+            var targetName = handlerData.TargetName;
+            var methodName = handlerData.MethodName;
+            var priority = handlerData.Priority;
+            var execType = handlerData.ExecType;
 
             var row = new VisualElement
             {
                 style =
                 {
-                    flexDirection = FlexDirection.Row, marginTop = 2, marginBottom = 2, marginLeft = 40,
+                    flexDirection = FlexDirection.Row, marginTop = 2, marginBottom = 2, marginLeft = marginLeft,
                     alignItems = Align.Center
                 }
             };
@@ -318,16 +575,16 @@ namespace ShrinkEventBus.Editor
             linkLabel.style.flexGrow = 1;
             row.Add(linkLabel);
 
-            if (targetInstance is MonoBehaviour mb && mb != null)
+            if (handlerData.PingTarget)
             {
                 var pingBtn = new Button(() =>
                 {
-                    EditorGUIUtility.PingObject(mb.gameObject);
-                    Selection.activeGameObject = mb.gameObject;
+                    EditorGUIUtility.PingObject(handlerData.PingTarget.gameObject);
+                    Selection.activeGameObject = handlerData.PingTarget.gameObject;
                 }) { text = "Ping", style = { width = 50, height = 18 } };
                 row.Add(pingBtn);
             }
-            else if (targetInstance == null && methodName != "未知方法")
+            else if (handlerData.IsStaticHandler && methodName != "未知方法")
                 row.Add(new Label("(静态)")
                 {
                     style = { width = 50, color = new StyleColor(Color.gray), unityTextAlign = TextAnchor.MiddleRight }
@@ -341,19 +598,18 @@ namespace ShrinkEventBus.Editor
             return row;
         }
 
-        private void ParseHandlerData(object handlerObj, out object targetInstance, out string targetName,
-            out string methodName, out object priority, out string execType)
+        private HandlerDisplayData ExtractHandlerDisplayData(object handlerObj)
         {
-            priority = GetMemberValue(handlerObj, "Priority") ?? "NORMAL";
+            var priority = GetMemberValue(handlerObj, "Priority") ?? "NORMAL";
             var debugInfo = GetMemberValue(handlerObj, "DebugInfo") as string ?? "未知方法";
 
-            execType = "Sync";
+            var execType = "Sync";
             if (debugInfo.Contains("(UniTask)") || debugInfo.Contains("Async")) execType = "Async";
             else if (debugInfo.Contains("(Task->UniTask)") || debugInfo.Contains("(Task)")) execType = "Task";
 
-            targetInstance = null;
-            targetName = "未知类";
-            methodName = debugInfo;
+            object targetInstance = null;
+            var targetName = "未知类";
+            var methodName = debugInfo;
 
             var handlerDelegate = GetMemberValue(handlerObj, "Handler") as Delegate;
             if (handlerDelegate != null)
@@ -379,6 +635,17 @@ namespace ShrinkEventBus.Editor
                     methodName = methodInfo.Name;
                 }
             }
+
+            return new HandlerDisplayData
+            {
+                TargetInstance = targetInstance,
+                PingTarget = targetInstance as MonoBehaviour,
+                TargetName = targetName,
+                MethodName = methodName,
+                Priority = priority,
+                ExecType = execType,
+                IsStaticHandler = targetInstance == null
+            };
         }
 
         private List<string> DumpEventParams(EventBase evt)
@@ -446,8 +713,8 @@ namespace ShrinkEventBus.Editor
 
         private void ClearLogs()
         {
-            _liveTrackerScrollView.Clear();
-            _logElements.Clear();
+            _logRecords.Clear();
+            RefreshLiveTrackerView();
         }
 
         private void OpenScriptByClassName(string className)
