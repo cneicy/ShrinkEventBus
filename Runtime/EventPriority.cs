@@ -18,7 +18,7 @@
             {
                 >= 100 => EventPriority.HIGHEST,
                 >= 50 => EventPriority.HIGH,
-                > 0 => EventPriority.NORMAL,
+                >= 0 => EventPriority.NORMAL,
                 >= -50 => EventPriority.LOW,
                 _ => EventPriority.LOWEST
             };

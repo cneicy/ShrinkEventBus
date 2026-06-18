@@ -7,17 +7,33 @@
 | 特性 | 说明 |
 |------|------|
 | 🔒 **类型安全** | 基于泛型的强类型事件，编译期检查，无装箱开销 |
-| ⚡ **高性能热路径** | 泛型静态缓存 `EventCache<T>` 绕过字典查找，触发路径几乎零开销 |
+| ⚡ **高性能热路径** | 注册期预编译 invoker（无反射调用、无装箱），派发走缓存快照数组，监听者快照零拷贝挂接 |
 | 🤖 **零侵入自动注册** | 标记 `[EventBusSubscriber]` 即可，ILPostProcessor 编译期自动织入注册与反注册逻辑，动态创建的对象也无需手写任何代码 |
+| 🧾 **静态订阅清单** | 静态 `[EventBusSubscriber]` 现可通过编译期注册表收口，避免默认总线启动时全域扫描所有类型 |
 | 🎯 **双重优先级** | 支持枚举优先级与数字优先级组合，精确控制执行顺序 |
-| 🔄 **同步 & 异步** | 统一支持 `Action`、`UniTask`、`Task` 三种 handler 形式 |
+| 🔄 **同步 & 异步** | 统一支持 `Action`（同步）与 `UniTask`（异步）两种 handler 形式 |
 | 🧵 **线程安全** | 注册/注销操作全程加锁保护 |
 | 📦 **对象池** | 内置 `EventPool<T>`，高频事件零 GC |
 | 🔍 **调试友好** | Editor 事件查看器实时追踪订阅者与触发日志 |
+| 🧩 **可实例化总线** | 除默认静态 `EventBus` 外，也可以用 Builder 创建独立 bus，并按需要配置异常策略、事件类型约束、分 phase 分发 |
+| 🌳 **父事件监听** | 监听父事件类型时，子事件触发也会命中父事件监听器，便于做 Pre/Post 家族事件和统一监控 |
 
 ## 👓 Benchmark
 
 [Benchmark结果](Benchmark.txt)
+
+运行时仓库里自带 `EventBusBenchmark` 组件，当前会分别覆盖这些场景：
+
+- 无订阅者 / 单订阅者 / 多订阅者同步触发
+- 父事件监听子事件
+- 按 `EventPriority` 分 phase 分发
+- 单订阅者异步触发
+- 手工 delegate 注册 / 注销
+- `object / Type / MethodInfo` 扫描注册 / 注销
+- `EventPool<T>` 与 `new`
+- 已取消事件跳过
+
+如果你在评估这次 `IShrinkEventBus`、继承监听和严格注册带来的成本变化，优先看这个组件的输出，而不是只看 `Benchmark.txt` 里的旧样本。
 
 ## 📦 依赖
 
@@ -42,6 +58,8 @@
 ```
 https://github.com/cneicy/ShrinkEventBus.git
 ```
+
+> ⚠️ **自动织入依赖说明**：当前工作区同时支持两层织入。若当前程序集命中共享管线 `ShrinkShared.CodeGen` 的覆盖范围（例如同时引用 `ShrinkCommand.Runtime` / `ShrinkNetwork.Runtime` / `ShrinkApp.Core.Runtime`），则优先由共享管线处理；其余只引用 `ShrinkEventBus.Runtime` 的程序集由模块内 `CodeGen/` 本地 ILPostProcessor 兜底。独立安装本包但未带上 `CodeGen/` 或共享管线时，没有编译期织入，请改用手动接入：MonoBehaviour 在 `Awake`/`OnDestroy` 中调用 `EventBus.AutoRegister(this)` / `EventBus.UnregisterInstance(this)`，或使用 `SubscribeEvent` 句柄。
 
 ## 🚀 快速上手
 
@@ -136,7 +154,13 @@ EventBus.TriggerEvent(evt);
 
 ### 自动注册机制
 
-ShrinkEventBus 通过 **ILPostProcessor** 在编译期自动处理完整的生命周期管理。当 Unity 编译代码时，所有标记了 `[EventBusSubscriber]` 的 MonoBehaviour 子类会被自动识别，并在其 `Awake` 和 `OnDestroy` 方法中分别织入注册与反注册逻辑。
+ShrinkEventBus 通过 **ILPostProcessor** 在编译期自动处理完整的生命周期管理。当 Unity 编译代码时，所有标记了 `[EventBusSubscriber]` 且自身或基类链上存在实例 `[EventSubscribe]` 方法的 MonoBehaviour 子类会被自动识别，并在其 `Awake` 和 `OnDestroy` 方法中分别织入注册与反注册逻辑（没有任何实例订阅方法的类型会被跳过，不织入也不报错）。
+
+当前织入策略如下：
+
+- 命中共享管线 `ShrinkShared.CodeGen` 覆盖范围的程序集，优先由共享管线处理。
+- 其余只引用 `ShrinkEventBus.Runtime` 的程序集，由模块内 `CodeGen/Editor/EventBusILPostProcessor.cs` 本地处理。
+- 因此 ShrinkSDK 工作区内的统一 CodeGen 与独立 `ShrinkEventBus` 业务程序集可以同时兼容，且不会双重织入。
 
 织入规则如下：
 
@@ -151,6 +175,57 @@ ShrinkEventBus 通过 **ILPostProcessor** 在编译期自动处理完整的生�
 - GameObject 销毁时 → `OnDestroy` 执行时自动反注册，无内存泄漏
 
 **整个过程对业务代码完全透明，类里不需要写任何注册相关的代码。**
+
+### 实例化总线与 Builder
+
+默认情况下，项目继续使用全局静态门面 `EventBus`。如果你需要更清晰的模块边界，也可以创建独立 bus：
+
+```csharp
+var gameplayBus = EventBus.CreateBus(builder => builder
+    .AllowPerPhaseDispatch()
+    .SetExceptionHandlingMode(ShrinkEventExceptionHandlingMode.LogAndThrow));
+
+gameplayBus.Register(new GameplaySubscribers());
+gameplayBus.TriggerEvent(new PlayerDiedEvent { PlayerId = 1, Cause = "Fall" });
+```
+
+当前 Builder 支持的重点配置：
+
+- `SetExceptionHandlingMode(...)`
+- `SetExceptionHandler(...)`
+- `AllowPerPhaseDispatch()`
+- `CheckTypesOnDispatch()`
+- `MarkerInterface<TMarker>()`
+- `ClassChecker(...)`
+- `StartShutdown()`
+
+如果你只是想继续沿用旧习惯，直接用静态 `EventBus` 即可；它内部就是一个默认的 `IShrinkEventBus` 实例。
+
+### 手动注册的新边界
+
+除了 `AutoRegister(this)` / `[EventBusSubscriber]` 这条 Unity 友好的自动接入路径，现在也支持更显式的手动注册：
+
+```csharp
+// 扫描实例上的 [EventSubscribe] 方法
+EventBus.Register(mySubscriberInstance);
+
+// 扫描某个类型上的 static [EventSubscribe] 方法
+EventBus.Register(typeof(GlobalEventHooks));
+
+// 只注册某一个 static [EventSubscribe] 方法
+EventBus.Register(typeof(GlobalEventHooks).GetMethod("OnPlayerDied",
+    BindingFlags.Static | BindingFlags.NonPublic));
+```
+
+和旧版本相比，手动注册现在会更严格：
+
+- 方法必须带 `[EventSubscribe]`
+- 只能有一个参数
+- 参数必须继承 `EventBase`
+- 返回值只能是 `void` 或 `UniTask`
+- 实例注册只接受实例方法，类型/方法注册只接受静态方法
+
+这样做的目的是把“为什么没触发”尽量提前到注册阶段暴露，而不是静默吞掉。
 
 ### 优先级系统
 
@@ -167,7 +242,7 @@ HIGHEST(0) → HIGH(1) → NORMAL(2) → LOW(3) → LOWEST(4) → MONITOR(5)
 [EventSubscribe(EventPriority.HIGH)]
 private void Handler(SomeEvent evt) { }
 
-// 数字优先级（自动映射到枚举档位）
+// 数字优先级（自动映射到枚举档位；手动注册时必须显式传入数字）
 EventBus.RegisterEvent<SomeEvent>(Handler, priority: 75); // 映射为 HIGH
 
 // 手动注册时混合使用
@@ -180,9 +255,11 @@ EventBus.RegisterEvent<SomeEvent>(Handler, EventPriority.HIGH, receiveCanceled: 
 |---------|---------|
 | ≥ 100 | HIGHEST |
 | ≥ 50 | HIGH |
-| > 0 | NORMAL |
+| ≥ 0 | NORMAL |
 | ≥ -50 | LOW |
 | < -50 | LOWEST |
+
+> 1.3.0 起：数字 `0` 映射到 `NORMAL`（与枚举重载默认值一致）；int 重载不再提供默认值，不带优先级的 `RegisterEvent(handler)` 调用唯一解析到枚举重载（NORMAL）。
 
 **推荐的优先级分工：**
 
@@ -194,6 +271,36 @@ LOW      — UI 更新、音效、特效
 LOWEST   — 收尾清理
 MONITOR  — 日志、统计、监控（通常配合 receiveCanceled: true）
 ```
+
+如果你创建的 bus 开启了 `AllowPerPhaseDispatch()`，也可以只分发某一个 phase：
+
+```csharp
+gameplayBus.TriggerEvent(EventPriority.HIGH, evt);
+await gameplayBus.TriggerEventAsync(EventPriority.MONITOR, evt);
+```
+
+这个模式主要适合做框架级流水线控制；普通业务仍推荐直接走完整分发。
+
+### 父事件监听
+
+现在监听父事件时，子事件触发也会命中父事件监听器：
+
+```csharp
+public class DamageEvent : EventBase
+{
+    public int Value { get; set; }
+}
+
+public sealed class CriticalDamageEvent : DamageEvent
+{
+    public bool IsCritical { get; set; }
+}
+
+EventBus.RegisterEvent<DamageEvent>(OnAnyDamage, EventPriority.MONITOR, receiveCanceled: true);
+EventBus.TriggerEvent(new CriticalDamageEvent { Value = 42, IsCritical = true });
+```
+
+这很适合做统一日志、统一权限检查、事件族级别的监控和桥接。
 
 ### 事件取消与结果
 
@@ -244,7 +351,8 @@ bool success = pickupEvent.Result switch
 | 方式 | 适用场景 | 自动反注册 |
 |------|---------|-----------|
 | `[EventBusSubscriber]` + `[EventSubscribe]` | MonoBehaviour（推荐） | ✅ ILP 织入 OnDestroy，随 GameObject 销毁自动清理 |
-| `EventBus.RegisterEvent(...)` 手动注册 | 非 MonoBehaviour 类、Lambda | ❌ 需手动调用 `UnregisterEvent` |
+| `EventBus.SubscribeEvent(...)` 手动订阅 | 非 MonoBehaviour 类、Lambda | ✅ `Dispose()` 即可精准清理 |
+| `EventBus.RegisterEvent(...)` 手动注册 | 兼容旧代码 | ❌ 需手动调用 `UnregisterEvent` |
 | `EventBus.AutoRegister(this)` | 特殊场景下手动触发 | ❌ 需手动调用 `UnregisterInstance` |
 
 **手动注册示例（非 MonoBehaviour）：**
@@ -252,17 +360,18 @@ bool success = pickupEvent.Result switch
 ```csharp
 public class InventorySystem : IDisposable
 {
+    private readonly IShrinkEventSubscription _itemPickupSubscription;
+
     public InventorySystem()
     {
-        EventBus.RegisterEvent<ItemPickupEvent>(OnItemPickup, EventPriority.NORMAL);
+        _itemPickupSubscription = EventBus.SubscribeEvent<ItemPickupEvent>(OnItemPickup, EventPriority.NORMAL);
     }
 
     private void OnItemPickup(ItemPickupEvent evt) { /* ... */ }
 
     public void Dispose()
     {
-        // 必须手动清理，否则 handler 持有 this 引用会造成内存泄漏
-        EventBus.UnregisterAllEventsForObject(this);
+        _itemPickupSubscription.Dispose();
     }
 }
 ```
@@ -279,9 +388,12 @@ public class InventorySystem : IDisposable
 // 同步 handler
 EventBus.RegisterEvent<TEvent>(Action<TEvent> handler, EventPriority priority, bool receiveCanceled);
 EventBus.RegisterEvent<TEvent>(Action<TEvent> handler, int priority);
+EventBus.SubscribeEvent<TEvent>(Action<TEvent> handler, EventPriority priority, bool receiveCanceled);
+EventBus.SubscribeEvent<TEvent>(Action<TEvent> handler, int priority);
 
 // 异步 handler（UniTask）
 EventBus.RegisterEvent<TEvent>(Func<TEvent, UniTask> handler, EventPriority priority, bool receiveCanceled);
+EventBus.SubscribeEvent<TEvent>(Func<TEvent, UniTask> handler, EventPriority priority, bool receiveCanceled);
 
 // 注销
 EventBus.UnregisterEvent<TEvent>(Action<TEvent> handler);
@@ -311,6 +423,7 @@ EventBus.GetRegisteredInstanceCount();
 EventBus.GetRegisteredEventTypeCount();
 EventBus.GetEventSubscribers<TEvent>();   // 返回 EventHandlerInfo[]
 EventBus.GetListenerList<TEvent>();       // 无订阅者时返回 null
+EventBus.GetActiveSubscriptionsSnapshot();// 返回 IDisposable 订阅快照
 ```
 
 ### EventPool\<T\>
@@ -333,7 +446,7 @@ EventBus.TriggerEvent(evt);
 ### EventBase 关键成员
 
 ```csharp
-evt.EventId          // Guid，每次触发唯一
+evt.EventId          // Guid，每次派发唯一（懒生成，首次访问时分配）
 evt.EventTime        // 事件创建时间（UTC）
 evt.IsCancelable     // 是否支持取消（由 [Cancelable] 决定）
 evt.HasResult        // 是否支持结果（由 [HasResult] 决定）
@@ -341,7 +454,7 @@ evt.IsCanceled       // 是否已被取消
 evt.Result           // 当前结果（EventResult 枚举）
 evt.Phase            // 当前执行到的优先级阶段
 evt.CurrentHandler   // 当前正在执行的 handler 信息
-evt.GetSubscribers() // 获取 handler 列表快照（调试用）
+evt.GetSubscribers() // 获取本次派发的 handler 快照拷贝（调试用）
 ```
 
 ---
@@ -351,46 +464,51 @@ evt.GetSubscribers() // 获取 handler 列表快照（调试用）
 ```
 ShrinkEventBus
 ├── Runtime/
-│   ├── EventBus                 静态门面，所有公开 API 的入口
-│   ├── EventCache<T>            泛型静态缓存，热路径绕过字典查找
-│   ├── ListenerList             线程安全的有序 handler 列表
-│   ├── EventHandlerInfo         单个 handler 的元信息（优先级、方法反射、调试信息）
-│   ├── EventBase                所有事件的基类，携带生命周期状态
+│   ├── EventBus                 静态门面，内部是一个默认 IShrinkEventBus 实例
+│   ├── ShrinkEventBusInstance   总线实现：注册、派发、异常策略、phase 分发
+│   ├── ShrinkEventBusBuilder    实例总线的构建与配置入口
+│   ├── ListenerList             按 phase 分桶的有序 handler 列表，带快照缓存与父链合并
+│   ├── EventHandlerInfo         单个 handler 的元信息（优先级、预编译 invoker、调试信息）
+│   ├── EventBase                所有事件的基类，携带生命周期状态与派发快照
 │   ├── EventPool<T>             对象池，高频事件减少 GC
+│   ├── EventCloneUtility        同步路径上 async handler 的事件快照克隆
 │   ├── EventBusRegHelper        反射扫描 & handler 注册逻辑
 │   └── EventAutoRegHelper       运行时初始化，确保 IsInitialized 状态正确
 │
 ├── Editor/
 │   └── EventBusViewerWindow     事件查看器，实时显示订阅者与触发日志
 │
-└── CodeGen/
-    └── EventBusILPostProcessor  编译期织入，向 [EventBusSubscriber] 类注入
-                                 Awake（AutoRegister）与 OnDestroy（UnregisterInstance）
+└── （织入）ShrinkShared.CodeGen / CodeGen  共享 ILPostProcessor 优先，本地 ILPostProcessor 兜底
+                                          向 [EventBusSubscriber] 类注入 Awake（AutoRegister）
+                                          与 OnDestroy（UnregisterInstance）
 ```
 
 **热路径（`TriggerEvent`）工作流：**
 
 ```
 TriggerEvent(evt)
-  └─ 读取 EventCache<T>.List          // 静态字段，O(1)，无字典查找
-       └─ GetHandlers()               // 返回内部快照数组，无拷贝
+  └─ 取该事件类型的 ListenerList     // 总线级字典 + 共享锁，每类型常数开销
+       └─ GetHandlers()              // 返回缓存快照数组（脏时才重建），无拷贝
+            ├─ 快照数组引用挂到事件对象上（一次赋值，供 GetSubscribers 调试）
             └─ 遍历 handlers[]
                  ├─ 跳过已取消 & 不接收取消的 handler
-                 ├─ Action<T> → 直接调用
-                 └─ Func<T, UniTask> → 基于事件快照 .Forget()（同步路径）
+                 ├─ Action<T> → 经预编译 invoker 直接调用
+                 └─ Func<T, UniTask> → 克隆事件快照后 .Forget()（同步路径）
 ```
 
 **自动注册完整流程：**
 
 ```
-【编译期】ILPostProcessor 扫描所有程序集
-  └─ 找到标记了 [EventBusSubscriber] 的 MonoBehaviour 子类
+【编译期】若当前程序集命中 ShrinkShared.CodeGen 覆盖范围，则由共享 ILPostProcessor 扫描；
+         否则由 CodeGen/EventBusILPostProcessor.cs 本地扫描
+  └─ 找到标记了 [EventBusSubscriber] 且存在实例 [EventSubscribe] 方法的 MonoBehaviour 子类
        ├─ 在 Awake 头部织入 EventBus.AutoRegister(this)
        └─ 在 OnDestroy 头部织入 EventBus.UnregisterInstance(this)
             （类无对应方法时自动生成，有虚基类方法时自动调用 base）
+  ※ 只引用 ShrinkEventBus.Runtime 的纯业务程序集目前不在织入范围内，需手动 AutoRegister
 
-【运行时 - 场景加载】RuntimeInitializeOnLoadMethod(AfterSceneLoad)
-  └─ 扫描程序集中的 [EventBusSubscriber] 类型，标记 IsInitialized
+【运行时 - 默认静态总线启动】
+  └─ 读取编译期静态订阅清单，注册 static [EventSubscribe] 方法
 
 【运行时 - 动态创建】Instantiate(prefab)
   └─ Unity 调用新对象的 Awake（已含织入代码）→ 自动注册
@@ -460,6 +578,8 @@ public void Dispose()
 - **不要在 handler 内直接注册/注销 handler**：可能影响当前正在遍历的 handler 快照，会产生语义上的不确定性。
 - **静态 handler 永远不会自动注销**：静态方法注册后持续存活直到显式调用 `UnregisterEvent`，不要在静态 handler 里持有场景对象引用。
 - **`[EventBusSubscriber]` 仅对 MonoBehaviour 生效自动注册**：非 MonoBehaviour 类标记该 Attribute 无任何效果，请使用手动注册。
+- **标了 `[EventBusSubscriber]` 但没有实例 `[EventSubscribe]` 方法的类**：编译期不会织入；若通过 `AutoRegister` 手动接入，会输出警告并跳过（不抛异常）。显式 `Register()` 对此仍严格抛错。
+- **int 数字优先级重载必须显式传值**：1.3.0 起 int 重载不再有默认值；数字 `0` 映射 `NORMAL`。
 - **ILPostProcessor 织入发生在编译期**：修改代码后需要重新编译才能使注入生效，热重载场景下请注意这一点。
 - **继承泛型基类（如 `Singleton<T>`）时无需额外处理**：ILP 会正确识别泛型基类中的虚方法并生成 `protected override`，自动调用 `base.Awake()` 和 `base.OnDestroy()`。
 
@@ -470,7 +590,7 @@ public void Dispose()
 **事件没有被任何 handler 接收**
 
 1. 检查订阅类是否有 `[EventBusSubscriber]`
-2. 检查方法是否有 `[EventSubscribe]`，且签名为 `void/UniTask/Task Method(TEvent evt)`
+2. 检查方法是否有 `[EventSubscribe]`，且签名为 `void/UniTask Method(TEvent evt)`
 3. 确认代码在标记 `[EventBusSubscriber]` 后重新编译过（ILPostProcessor 需要编译期运行）
 4. 确认没有在 `Awake` 之前就触发事件
 

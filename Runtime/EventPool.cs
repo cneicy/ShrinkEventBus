@@ -1,10 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace ShrinkEventBus
 {
     public static class EventPool<T> where T : EventBase, new()
     {
+        private const int MaxPoolSize = 128;
+
         private static readonly Stack<T> Pool = new(32);
         private static readonly object Lock = new();
         private static readonly Action<EventBase> CachedReleaseAction = e => Release((T)e);
@@ -28,13 +30,16 @@ namespace ShrinkEventBus
 
         public static void Release(T evt)
         {
-            if (evt == null || evt.IsInPool) return;
-
-            evt.ResetInternal();
-            evt.IsInPool = true;
+            if (evt == null)
+                return;
 
             lock (Lock)
             {
+                if (evt.IsInPool || Pool.Count >= MaxPoolSize)
+                    return;
+
+                evt.ResetInternal();
+                evt.IsInPool = true;
                 Pool.Push(evt);
             }
         }

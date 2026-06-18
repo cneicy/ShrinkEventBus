@@ -1,68 +1,83 @@
-[Benchmark] 开始：无订阅者触发
-[Benchmark] 完成：无订阅者触发
-[Benchmark] 开始：单订阅者同步触发
-[Benchmark] 完成：单订阅者同步触发
-[Benchmark] 开始：30 订阅者同步触发
-[Benchmark] 完成：30 订阅者同步触发
-[Benchmark] 开始：异步触发
-[Benchmark] 完成：异步触发
-[Benchmark] 开始：注册/注销
-[Benchmark] 完成：RegisterEvent
-[Benchmark] 完成：UnregisterEvent
-[Benchmark] 开始：EventPool vs new
-[Benchmark] 完成：new() 分配
-[Benchmark] 完成：Pool.Get()
-[Benchmark] 开始：已取消事件跳过
-[Benchmark] 完成：已取消事件跳过
 ╔══════════════════════════════════════════════════╗
 ║         ShrinkEventBus Benchmark Report          ║
-║  iter= 1000000 mass=10000 reg= 5000 cancel=100000  ║
+║ iter= 1000000 mass= 10000 reg= 5000 scan=1000 ║
 ╚══════════════════════════════════════════════════╝
+  基准对象：独立实例 bus（AllowPerPhaseDispatch 已开启）
+  采集于 1.3.0（EventBase 瘦身后；Unity 2022.3.62f3, Editor Play Mode）
 
   ▶ TriggerEvent × 无订阅者（基线）
-      总耗时 :     68.481 ms
-      单次   :     0.0685 μs/op
-      吞吐量 :   14602548 ops/s
+      总耗时 :    111.466 ms
+      单次   :     0.1115 μs/op
+      吞吐量 :    8971378 ops/s
 
   ▶ TriggerEvent × 单订阅者同步
-      总耗时 :    115.262 ms
-      单次   :     0.1153 μs/op
-      吞吐量 :    8675871 ops/s
+      总耗时 :    163.073 ms
+      单次   :     0.1631 μs/op
+      吞吐量 :    6132242 ops/s
+
+  ▶ TriggerEvent × 父事件监听子事件
+      总耗时 :    171.424 ms
+      单次   :     0.1714 μs/op
+      吞吐量 :    5833479 ops/s
 
   ▶ TriggerEvent × 30 订阅者同步
-      总耗时 :      7.376 ms
-      单次   :     0.7376 μs/op
-      吞吐量 :    1355712 ops/s
+      总耗时 :     38.639 ms
+      单次   :     3.8639 μs/op
+      吞吐量 :     258805 ops/s
+
+  ▶ TriggerEvent(Phase=HIGH) × 3 phase 监听
+      总耗时 :    164.197 ms
+      单次   :     0.1642 μs/op
+      吞吐量 :    6090238 ops/s
 
   ▶ TriggerEventAsync × 单订阅者异步
-      总耗时 :      0.684 ms
-      单次   :     0.6840 μs/op
-      吞吐量 :    1461988 ops/s
+      总耗时 :      0.856 ms
+      单次   :     0.8557 μs/op
+      吞吐量 :    1168634 ops/s
 
-  ▶ RegisterEvent
-      总耗时 :     18.780 ms
-      单次   :     3.7561 μs/op
-      吞吐量 :     266236 ops/s
+  ▶ RegisterEvent(delegate)
+      总耗时 :     14.418 ms
+      单次   :     2.8836 μs/op
+      吞吐量 :     346791 ops/s
 
-  ▶ UnregisterEvent
-      总耗时 :    117.646 ms
-      单次   :    23.5292 μs/op
-      吞吐量 :      42500 ops/s
+  ▶ UnregisterEvent(delegate)
+      总耗时 :      3.427 ms
+      单次   :     0.6853 μs/op
+      吞吐量 :    1459130 ops/s
 
-  ▶ TriggerEvent × new()      [GC Gen0=6457]
-      总耗时 :   7684.313 ms
-      单次   :     7.6843 μs/op
-      吞吐量 :     130135 ops/s
+  ▶ Register/Unregister(instance scan)
+      总耗时 :     13.097 ms
+      单次   :    13.0971 μs/op
+      吞吐量 :      76353 ops/s
 
-  ▶ TriggerEvent × Pool.Get() [GC Gen0= 91]
-      总耗时 :    348.948 ms
-      单次   :     0.3489 μs/op
-      吞吐量 :    2865761 ops/s
+  ▶ Register/Unregister(static type scan)
+      总耗时 :      9.337 ms
+      单次   :     9.3374 μs/op
+      吞吐量 :     107096 ops/s
+
+  ▶ Register/Unregister(MethodInfo)
+      总耗时 :      6.513 ms
+      单次   :     6.5134 μs/op
+      吞吐量 :     153530 ops/s
+
+  ▶ TriggerEvent × new()      [GC Gen0=  1]
+      总耗时 :    266.536 ms
+      单次   :     0.2665 μs/op
+      吞吐量 :    3751843 ops/s
+
+  ▶ TriggerEvent × Pool.Get() [GC Gen0=  0]
+      总耗时 :    242.015 ms
+      单次   :     0.2420 μs/op
+      吞吐量 :    4131982 ops/s
 
   ▶ TriggerEvent × 已取消事件跳过（10 订阅者）
-      总耗时 :     25.282 ms
-      单次   :     0.2528 μs/op
-      吞吐量 :    3955352 ops/s
+      总耗时 :     52.777 ms
+      单次   :     0.5278 μs/op
+      吞吐量 :    1894776 ops/s
 
 ══════════════════════════════════════════════════
   全部测试完成
+
+  对比 1.1.x 旧样本：new() 路径 7684ms / GC Gen0=6457 → 266ms / GC Gen0=1
+  （EventBase 不再每实例分配内置 ListenerList，new() 路径 GC 基本归零，
+   对象池从“高频必需”降级为可选优化。）

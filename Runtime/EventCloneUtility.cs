@@ -18,8 +18,9 @@ namespace ShrinkEventBus
                 throw new InvalidOperationException(
                     $"Cannot clone event type {source.GetType().FullName}. A public parameterless constructor is required.");
 
+            // 先固化 EventId，让克隆与原事件共享同一个派发标识
+            _ = source.EventId;
             CopyFields(source, clone);
-            CopyListenerSnapshot(source, clone);
             clone.ReleaseAction = null;
             clone.IsInPool = false;
             return clone;
@@ -30,16 +31,6 @@ namespace ShrinkEventBus
             var fields = GetCopyableFields(source.GetType());
             for (var i = 0; i < fields.Length; i++)
                 fields[i].SetValue(target, fields[i].GetValue(source));
-        }
-
-        private static void CopyListenerSnapshot(EventBase source, EventBase target)
-        {
-            var targetListeners = target.GetListenerList();
-            targetListeners.Clear();
-
-            var sourceHandlers = source.GetListenerList().GetHandlers();
-            for (var i = 0; i < sourceHandlers.Length; i++)
-                targetListeners.Add(sourceHandlers[i]);
         }
 
         private static FieldInfo[] GetCopyableFields(Type type)
@@ -77,8 +68,7 @@ namespace ShrinkEventBus
 
         private static bool ShouldSkipField(FieldInfo field)
         {
-            return field.Name is "_listenerList"
-                or "<ReleaseAction>k__BackingField"
+            return field.Name is "<ReleaseAction>k__BackingField"
                 or "<IsInPool>k__BackingField";
         }
     }

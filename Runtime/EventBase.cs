@@ -1,5 +1,6 @@
-﻿#nullable enable
+#nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.Serialization;
 
@@ -7,7 +8,16 @@ namespace ShrinkEventBus
 {
     public abstract class EventBase : IDisposable
     {
-        private readonly ListenerList _listenerList = new();
+        private sealed class EventMetadata
+        {
+            public bool IsCancelable;
+            public bool HasResult;
+        }
+
+        private static readonly ConcurrentDictionary<Type, EventMetadata> MetadataCache = new();
+
+        private EventHandlerInfo[]? _dispatchSnapshot;
+        private Guid? _eventId;
         private bool _isCanceled;
         private EventResult _result = EventResult.DEFAULT;
 
@@ -18,7 +28,7 @@ namespace ShrinkEventBus
         public DateTime EventTime { get; private set; } = DateTime.UtcNow;
 
         [IgnoreDataMember]
-        public Guid EventId { get; private set; } = Guid.NewGuid();
+        public Guid EventId => _eventId ??= Guid.NewGuid();
 
         [IgnoreDataMember]
         public bool IsCancelable { get; }
@@ -34,13 +44,14 @@ namespace ShrinkEventBus
 
         protected EventBase()
         {
-            IsCancelable = GetType().GetCustomAttribute<CancelableAttribute>() != null;
-            HasResult = GetType().GetCustomAttribute<HasResultAttribute>() != null;
+            var metadata = GetOrCreateMetadata(GetType());
+            IsCancelable = metadata.IsCancelable;
+            HasResult = metadata.HasResult;
             Setup();
         }
 
         protected virtual void Setup() { }
-        
+
         protected virtual void OnReset() { }
 
         internal void ResetInternal()
@@ -50,8 +61,8 @@ namespace ShrinkEventBus
             CurrentHandler = null;
             Phase = null;
             EventTime = DateTime.UtcNow;
-            EventId = Guid.NewGuid();
-            _listenerList.Clear();
+            _eventId = null;
+            _dispatchSnapshot = null;
             OnReset();
         }
 
@@ -60,8 +71,13 @@ namespace ShrinkEventBus
             CurrentHandler = null;
             Phase = null;
             EventTime = DateTime.UtcNow;
-            EventId = Guid.NewGuid();
-            _listenerList.Clear();
+            _eventId = null;
+            _dispatchSnapshot = null;
+        }
+
+        internal void SetListenerSnapshot(EventHandlerInfo[]? handlers)
+        {
+            _dispatchSnapshot = handlers is { Length: > 0 } ? handlers : null;
         }
 
         [IgnoreDataMember]
@@ -70,7 +86,9 @@ namespace ShrinkEventBus
             get => _isCanceled;
             set
             {
-                if (!IsCancelable) throw new UnsupportedOperationException();
+                if (!IsCancelable)
+                    throw new UnsupportedOperationException(
+                        $"Event {GetType().Name} is not cancelable. Mark it with [Cancelable] to allow cancellation.");
                 _isCanceled = value;
             }
         }
@@ -81,7 +99,9 @@ namespace ShrinkEventBus
             get => _result;
             set
             {
-                if (!HasResult) throw new InvalidOperationException();
+                if (!HasResult)
+                    throw new InvalidOperationException(
+                        $"Event {GetType().Name} does not support results. Mark it with [HasResult] to allow setting a result.");
                 _result = value;
             }
         }
@@ -90,18 +110,37 @@ namespace ShrinkEventBus
         {
             if (Phase == value) return;
             if (Phase != null && Phase.Value.CompareTo(value) > 0)
-                throw new ArgumentException();
+                throw new ArgumentException(
+                    $"Event phase cannot move backwards from {Phase.Value} to {value}.", nameof(value));
             Phase = value;
         }
 
         public void SetCanceled(bool canceled) => IsCanceled = canceled;
         public void SetResult(EventResult result) => Result = result;
-        public ListenerList GetListenerList() => _listenerList;
-        public EventHandlerInfo[] GetSubscribers() => _listenerList.GetHandlers();
+
+        public EventHandlerInfo[] GetSubscribers()
+        {
+            var snapshot = _dispatchSnapshot;
+            if (snapshot == null || snapshot.Length == 0)
+                return Array.Empty<EventHandlerInfo>();
+
+            var copy = new EventHandlerInfo[snapshot.Length];
+            Array.Copy(snapshot, copy, snapshot.Length);
+            return copy;
+        }
 
         public void Dispose()
         {
             ReleaseAction?.Invoke(this);
+        }
+
+        private static EventMetadata GetOrCreateMetadata(Type eventType)
+        {
+            return MetadataCache.GetOrAdd(eventType, static type => new EventMetadata
+            {
+                IsCancelable = type.GetCustomAttribute<CancelableAttribute>() != null,
+                HasResult = type.GetCustomAttribute<HasResultAttribute>() != null
+            });
         }
     }
 }

@@ -1,18 +1,21 @@
-﻿using System.Linq;
+#nullable enable
+
+using System.Linq;
 using System.Reflection;
 using Mono.Cecil;
 
 namespace ShrinkEventBus.CodeGen
 {
-    internal class PostProcessorReflectionImporter : DefaultReflectionImporter
+    internal sealed class PostProcessorReflectionImporter : DefaultReflectionImporter
     {
         private const string CoreLibName = "System.Private.CoreLib";
-        private readonly AssemblyNameReference _corlib;
+        private readonly AssemblyNameReference? _corlib;
 
-        public PostProcessorReflectionImporter(ModuleDefinition module) : base(module)
+        public PostProcessorReflectionImporter(ModuleDefinition module)
+            : base(module)
         {
             _corlib = module.AssemblyReferences.FirstOrDefault(
-                a => a.Name is "mscorlib" or "netstandard");
+                assembly => assembly.Name is "mscorlib" or "netstandard");
         }
 
         public override AssemblyNameReference ImportReference(AssemblyName reference)
@@ -24,9 +27,11 @@ namespace ShrinkEventBus.CodeGen
         }
     }
 
-    internal class PostProcessorReflectionImporterProvider : IReflectionImporterProvider
+    internal sealed class PostProcessorReflectionImporterProvider : IReflectionImporterProvider
     {
         public IReflectionImporter GetReflectionImporter(ModuleDefinition module)
-            => new PostProcessorReflectionImporter(module);
+        {
+            return new PostProcessorReflectionImporter(module);
+        }
     }
 }

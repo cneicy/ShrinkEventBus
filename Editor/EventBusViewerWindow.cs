@@ -64,7 +64,10 @@ namespace ShrinkEventBus.Editor
         private LiveLogFilterMode _liveLogFilterMode = LiveLogFilterMode.All;
         private bool _collapseSameEventType = true;
         private const int MaxLogCount = 100;
+        private const double LiveTrackerRefreshIntervalSeconds = 0.1d;
         private readonly List<EventLogRecord> _logRecords = new();
+        private bool _isLiveTrackerDirty;
+        private double _nextLiveTrackerRefreshTime;
 
         [MenuItem("ShrinkSDK/事件总线/事件查看器")]
         public static void ShowWindow()
@@ -74,8 +77,17 @@ namespace ShrinkEventBus.Editor
             window.Show();
         }
 
-        private void OnEnable() => EventBus.OnEventTriggeredForEditor += RecordEventLog;
-        private void OnDisable() => EventBus.OnEventTriggeredForEditor -= RecordEventLog;
+        private void OnEnable()
+        {
+            EventBus.OnEventTriggeredForEditor += RecordEventLog;
+            EditorApplication.update += OnEditorUpdate;
+        }
+
+        private void OnDisable()
+        {
+            EventBus.OnEventTriggeredForEditor -= RecordEventLog;
+            EditorApplication.update -= OnEditorUpdate;
+        }
 
         private void CreateGUI()
         {
@@ -166,7 +178,7 @@ namespace ShrinkEventBus.Editor
             searchField.RegisterValueChangedCallback(evt =>
             {
                 _liveLogSearchString = evt.newValue ?? string.Empty;
-                RefreshLiveTrackerView();
+                RequestLiveTrackerRefresh(true);
             });
             toolbar.Add(searchField);
 
@@ -175,19 +187,19 @@ namespace ShrinkEventBus.Editor
             {
                 _liveLogFilterMode = LiveLogFilterMode.All;
                 filterMenu.text = "全部事件";
-                RefreshLiveTrackerView();
+                RequestLiveTrackerRefresh(true);
             });
             filterMenu.menu.AppendAction("仅有监听者", _ =>
             {
                 _liveLogFilterMode = LiveLogFilterMode.HasListeners;
                 filterMenu.text = "仅有监听者";
-                RefreshLiveTrackerView();
+                RequestLiveTrackerRefresh(true);
             });
             filterMenu.menu.AppendAction("仅无监听者", _ =>
             {
                 _liveLogFilterMode = LiveLogFilterMode.NoListeners;
                 filterMenu.text = "仅无监听者";
-                RefreshLiveTrackerView();
+                RequestLiveTrackerRefresh(true);
             });
             toolbar.Add(filterMenu);
 
@@ -199,7 +211,7 @@ namespace ShrinkEventBus.Editor
             collapseToggle.RegisterValueChangedCallback(evt =>
             {
                 _collapseSameEventType = evt.newValue;
-                RefreshLiveTrackerView();
+                RequestLiveTrackerRefresh(true);
             });
             toolbar.Add(collapseToggle);
             toolbar.Add(new ToolbarButton(ClearLogs) { text = "清空日志" });
@@ -220,7 +232,7 @@ namespace ShrinkEventBus.Editor
 
             _liveTrackerScrollView = new ScrollView { style = { flexGrow = 1, paddingLeft = 5, paddingRight = 5 } };
             container.Add(_liveTrackerScrollView);
-            RefreshLiveTrackerView();
+            RequestLiveTrackerRefresh(true);
             return container;
         }
 
@@ -228,7 +240,31 @@ namespace ShrinkEventBus.Editor
         {
             _subscribersTab.style.display = index == 0 ? DisplayStyle.Flex : DisplayStyle.None;
             _liveTrackerTab.style.display = index == 1 ? DisplayStyle.Flex : DisplayStyle.None;
-            if (index == 0) RefreshSubscribersView();
+            if (index == 0)
+            {
+                RefreshSubscribersView();
+                return;
+            }
+            RequestLiveTrackerRefresh(true);
+        }
+
+        private void OnEditorUpdate()
+        {
+            if (!_isLiveTrackerDirty) return;
+            if (_liveTrackerTab == null || _liveTrackerTab.style.display != DisplayStyle.Flex) return;
+            if (EditorApplication.timeSinceStartup < _nextLiveTrackerRefreshTime) return;
+            RefreshLiveTrackerView();
+        }
+
+        private void RequestLiveTrackerRefresh(bool immediate = false)
+        {
+            _isLiveTrackerDirty = true;
+            if (immediate)
+            {
+                _nextLiveTrackerRefreshTime = EditorApplication.timeSinceStartup;
+                if (_liveTrackerTab != null && _liveTrackerTab.style.display == DisplayStyle.Flex)
+                    RefreshLiveTrackerView();
+            }
         }
 
         private void RefreshSubscribersView()
@@ -240,20 +276,14 @@ namespace ShrinkEventBus.Editor
                 return;
             }
 
-            var field = typeof(EventBus).GetField("EventHandlers", BindingFlags.NonPublic | BindingFlags.Static);
-            if (field == null) return;
-            var dict = field.GetValue(null) as IDictionary;
-            if (dict == null) return;
-
-            foreach (DictionaryEntry entry in dict)
+            var snapshots = EventBus.GetAllSubscribersSnapshot();
+            foreach (var entry in snapshots)
             {
-                var eventType = entry.Key as Type;
+                var eventType = entry.Key;
                 if (!string.IsNullOrEmpty(_searchString) &&
                     !eventType.Name.ToLower().Contains(_searchString.ToLower())) continue;
 
-                var listenerListObj = entry.Value;
-                var handlers =
-                    listenerListObj.GetType().GetMethod("GetHandlers")?.Invoke(listenerListObj, null) as Array;
+                var handlers = entry.Value;
 
                 var foldout = new Foldout
                 {
@@ -273,20 +303,19 @@ namespace ShrinkEventBus.Editor
             }
         }
 
-        private void RecordEventLog(EventBase evt, string eventName, string senderInfo)
+        private void RecordEventLog(EventBase evt, string eventName, string senderInfo, EventHandlerInfo[] handlers)
         {
             if (!EventBus.EnableDebugRecord) return;
-            _logRecords.Insert(0, CreateEventLogRecord(evt, eventName, senderInfo));
+            _logRecords.Add(CreateEventLogRecord(evt, eventName, senderInfo, handlers));
             if (_logRecords.Count > MaxLogCount)
-                _logRecords.RemoveAt(_logRecords.Count - 1);
-            RefreshLiveTrackerView();
+                _logRecords.RemoveAt(0);
+            RequestLiveTrackerRefresh();
         }
 
-        private EventLogRecord CreateEventLogRecord(EventBase evt, string eventName, string senderInfo)
+        private EventLogRecord CreateEventLogRecord(EventBase evt, string eventName, string senderInfo,
+            EventHandlerInfo[] handlers)
         {
             var timestamp = DateTime.Now;
-            var list = evt.GetListenerList();
-            var handlers = list?.GetHandlers() ?? Array.Empty<EventHandlerInfo>();
             var hasListeners = handlers.Length > 0;
             var paramsList = DumpEventParams(evt);
             var handlerRows = new List<HandlerDisplayData>(handlers.Length);
@@ -325,12 +354,15 @@ namespace ShrinkEventBus.Editor
         private void RefreshLiveTrackerView()
         {
             if (_liveTrackerScrollView == null) return;
+            _isLiveTrackerDirty = false;
+            _nextLiveTrackerRefreshTime = EditorApplication.timeSinceStartup + LiveTrackerRefreshIntervalSeconds;
 
             _liveTrackerScrollView.Clear();
 
-            var filteredRecords = new List<EventLogRecord>();
-            foreach (var record in _logRecords)
+            var filteredRecords = new List<EventLogRecord>(_logRecords.Count);
+            for (var i = _logRecords.Count - 1; i >= 0; i--)
             {
+                var record = _logRecords[i];
                 if (MatchesLiveLogFilter(record))
                     filteredRecords.Add(record);
             }
@@ -425,15 +457,36 @@ namespace ShrinkEventBus.Editor
                 }
             };
             foldout.Add(summary);
+            if (foldout.value)
+                PopulateCollapsedGroupDetails(foldout, group, 1);
+            foldout.RegisterValueChangedCallback(evt =>
+            {
+                if (evt.newValue)
+                {
+                    PopulateCollapsedGroupDetails(foldout, group, 1);
+                    return;
+                }
+                ClearFoldoutChildren(foldout, 1);
+            });
 
+            return foldout;
+        }
+
+        private void PopulateCollapsedGroupDetails(Foldout foldout, EventLogGroup group, int keepChildCount)
+        {
+            if (foldout.childCount > keepChildCount) return;
             foreach (var record in group.Records)
             {
                 var row = CreateLogEntryElement(record);
                 row.style.marginLeft = 12;
                 foldout.Add(row);
             }
+        }
 
-            return foldout;
+        private void ClearFoldoutChildren(Foldout foldout, int keepChildCount)
+        {
+            while (foldout.childCount > keepChildCount)
+                foldout.RemoveAt(foldout.childCount - 1);
         }
 
         private VisualElement CreateLogEntryElement(EventLogRecord record)
@@ -714,7 +767,7 @@ namespace ShrinkEventBus.Editor
         private void ClearLogs()
         {
             _logRecords.Clear();
-            RefreshLiveTrackerView();
+            RequestLiveTrackerRefresh(true);
         }
 
         private void OpenScriptByClassName(string className)

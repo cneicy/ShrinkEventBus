@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+#nullable enable
+
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using Mono.Cecil;
@@ -6,11 +8,11 @@ using Unity.CompilationPipeline.Common.ILPostProcessing;
 
 namespace ShrinkEventBus.CodeGen
 {
-    internal class PostProcessorAssemblyResolver : IAssemblyResolver
+    internal sealed class PostProcessorAssemblyResolver : IAssemblyResolver
     {
         private readonly string[] _references;
         private readonly Dictionary<string, AssemblyDefinition> _cache = new();
-        private AssemblyDefinition _self;
+        private AssemblyDefinition? _self;
 
         public PostProcessorAssemblyResolver(ICompiledAssembly compiledAssembly)
         {
@@ -22,10 +24,12 @@ namespace ShrinkEventBus.CodeGen
             _self = assemblyDefinition;
         }
 
-        public AssemblyDefinition Resolve(AssemblyNameReference name)
-            => Resolve(name, new ReaderParameters(ReadingMode.Deferred));
+        public AssemblyDefinition? Resolve(AssemblyNameReference name)
+        {
+            return Resolve(name, new ReaderParameters(ReadingMode.Deferred));
+        }
 
-        public AssemblyDefinition Resolve(AssemblyNameReference name, ReaderParameters parameters)
+        public AssemblyDefinition? Resolve(AssemblyNameReference name, ReaderParameters parameters)
         {
             lock (_cache)
             {
@@ -33,10 +37,12 @@ namespace ShrinkEventBus.CodeGen
                     return _self;
 
                 var path = FindPath(name);
-                if (path == null) return null;
+                if (path == null)
+                    return null;
 
                 var key = $"{path}{File.GetLastWriteTime(path)}";
-                if (_cache.TryGetValue(key, out var cached)) return cached;
+                if (_cache.TryGetValue(key, out var cached))
+                    return cached;
 
                 parameters.AssemblyResolver = this;
                 var ms = ReadFileWithRetry(path);
@@ -51,25 +57,27 @@ namespace ShrinkEventBus.CodeGen
             }
         }
 
-        private string FindPath(AssemblyNameReference name)
+        private string? FindPath(AssemblyNameReference name)
         {
-            foreach (var r in _references)
+            foreach (var reference in _references)
             {
-                if (Path.GetFileNameWithoutExtension(r) == name.Name)
-                    return r;
+                if (Path.GetFileNameWithoutExtension(reference) == name.Name)
+                    return reference;
             }
 
             var dirs = new HashSet<string>();
-            foreach (var r in _references)
+            foreach (var reference in _references)
             {
-                var dir = Path.GetDirectoryName(r);
-                if (dir != null) dirs.Add(dir);
+                var dir = Path.GetDirectoryName(reference);
+                if (dir != null)
+                    dirs.Add(dir);
             }
 
             foreach (var dir in dirs)
             {
                 var candidate = Path.Combine(dir, $"{name.Name}.dll");
-                if (File.Exists(candidate)) return candidate;
+                if (File.Exists(candidate))
+                    return candidate;
             }
 
             return null;
@@ -81,17 +89,19 @@ namespace ShrinkEventBus.CodeGen
             {
                 try
                 {
-                    var bytes = File.ReadAllBytes(path);
-                    return new MemoryStream(bytes);
+                    return new MemoryStream(File.ReadAllBytes(path));
                 }
                 catch (IOException) when (i < retries - 1)
                 {
                     Thread.Sleep(100);
                 }
             }
-            throw new IOException($"[ShrinkEventBus] 无法读取文件: {path}");
+
+            throw new IOException($"[ShrinkEventBus.CodeGen] 无法读取文件: {path}");
         }
 
-        public void Dispose() { }
+        public void Dispose()
+        {
+        }
     }
 }
